@@ -1,0 +1,2434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Trading Dashboard — Jake</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #060b18; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0a1020; }
+  ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+  input::placeholder, textarea::placeholder { color: #475569; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .spin { display: inline-block; animation: spin 1.2s linear infinite; }
+  .card:hover { border-color: #334155 !important; transform: translateY(-1px); }
+  .card { transition: all 0.15s ease; }
+  .stage-btn:hover { opacity: 0.85; }
+  .research-output h1, .research-output h2, .research-output h3 { color: #e2e8f0; margin: 18px 0 8px; }
+  .research-output h1 { font-size: 18px; font-weight: 900; }
+  .research-output h2 { font-size: 15px; font-weight: 800; color: #94a3b8; }
+  .research-output h3 { font-size: 13px; font-weight: 700; color: #64748b; }
+  .research-output p { color: #cbd5e1; font-size: 13px; line-height: 1.7; margin: 6px 0; }
+  .research-output ul, .research-output ol { color: #cbd5e1; font-size: 13px; line-height: 1.7; margin: 6px 0 6px 20px; }
+  .research-output li { margin: 3px 0; }
+  .research-output strong { color: #f8fafc; }
+  .research-output em { color: #94a3b8; }
+  .research-output table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 12px; }
+  .research-output th { background: #1e293b; color: #94a3b8; padding: 8px 12px; text-align: left; border: 1px solid #334155; font-weight: 700; }
+  .research-output td { padding: 8px 12px; border: 1px solid #1e293b; color: #cbd5e1; }
+  .research-output tr:nth-child(even) td { background: #0d132408; }
+  .research-output blockquote { border-left: 3px solid #3b82f6; padding: 8px 16px; margin: 10px 0; background: #1e293b22; color: #94a3b8; font-style: italic; }
+  .prompt-card:hover { border-color: #475569 !important; background: #111827 !important; }
+  .prompt-card { transition: all 0.15s ease; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ================================================================
+// STAGE DEFINITIONS
+// ================================================================
+const STAGES = {
+  0: { name: "Hibernation", icon: "💤", color: "#64748B", glow: "rgba(100,116,139,0.10)", border: "#334155",
+       strategy: "No Setup", desc: "Stock doesn't clearly fit any stage. Not consolidating in a defined range, not trending, not breaking out. Watch and wait." },
+  1: { name: "Consolidation", icon: "◈", color: "#94A3B8", glow: "rgba(148,163,184,0.12)", border: "#475569",
+       strategy: "Mean-Reversion", desc: "Sideways price action within a well-defined range. Volatility contracting (VCP). Timeframes: 4wk, 3mo, 6mo, 1yr, 3yr." },
+  2: { name: "Breakout", icon: "⚡", color: "#3B82F6", glow: "rgba(59,130,246,0.15)", border: "#2563EB",
+       strategy: "Directional Bias", desc: "Close outside the consolidation range on ≥0.7 RVOL. Breakout level is relative to the consolidation timeframe." },
+  3: { name: "Trending", icon: "📈", color: "#22C55E", glow: "rgba(34,197,94,0.15)", border: "#16A34A",
+       strategy: "Overnight Momo / Pullback Buys", desc: "EMA 5d > 10d > 20d stacking. Confirmed only if preceded by S1→S2 chain." },
+  4: { name: "Exhausting", icon: "🔥", color: "#F59E0B", glow: "rgba(245,158,11,0.15)", border: "#D97706",
+       strategy: "Delta-Hedge Options", desc: "Multiple daily gaps in same direction + expanding intraday ranges. Must come from a trend." },
+  5: { name: "The Turn", icon: "🔄", color: "#EF4444", glow: "rgba(239,68,68,0.15)", border: "#DC2626",
+       strategy: "Fully-Hedged Position", desc: "Snapback reversal after exhaustion. Gap in exhaustion direction + first-candle reversal. Rare — requires prior S4 exhaustion (multiple gaps + expanding ranges)." },
+  6: { name: "Follow Through", icon: "✅", color: "#8B5CF6", glow: "rgba(139,92,246,0.15)", border: "#7C3AED",
+       strategy: "Call/Put Spreads", desc: "Turn confirmed on above-avg volume, closing at extreme of intraday range." },
+};
+
+// ================================================================
+// STOCK LISTS
+// ================================================================
+const MACRO = ["SPY","QQQ","IWM","TLT","GLD","SLV","USO"];
+const MAINSTREAM = ["NVDA","AAPL","GOOG","MSFT","AMZN","META","AVGO","TSLA","BRK-B","WMT","LLY","JPM","XOM","JNJ","ORCL","COST","MU","NFLX","PLTR","HD","GE","KO","CAT","AMD","CSCO","RTX","AMAT"];
+const INIT_IP = ["SNDK","BABA","OWL","GEV","SOC","SLG"];
+const REFRESH_MS = 30 * 60 * 1000;
+const TABS = { macro: { label: "Macro", syms: MACRO }, mainstream: { label: "Mainstream", syms: MAINSTREAM }, inplay: { label: "In Play" }, nearbreak: { label: "Near Break" } };
+
+// ================================================================
+// EMA FUNCTIONS
+// ================================================================
+function calcEMA(data, period) {
+  if (!data || data.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < data.length; i++) ema = data[i] * k + ema * (1 - k);
+  return ema;
+}
+function calcEMASeries(data, period) {
+  if (!data || data.length < period) return [];
+  const k = 2 / (period + 1);
+  const out = new Array(period - 1).fill(null);
+  let ema = data.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  out.push(ema);
+  for (let i = period; i < data.length; i++) { ema = data[i] * k + ema * (1 - k); out.push(ema); }
+  return out;
+}
+
+// ================================================================
+// RSI CALCULATION
+// ================================================================
+function calcRSI(data, period) {
+  // Returns current RSI value (0–100)
+  if (!data || data.length < period + 1) return null;
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const delta = data[i] - data[i - 1];
+    if (delta > 0) avgGain += delta; else avgLoss += Math.abs(delta);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  for (let i = period + 1; i < data.length; i++) {
+    const delta = data[i] - data[i - 1];
+    avgGain = (avgGain * (period - 1) + (delta > 0 ? delta : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (delta < 0 ? Math.abs(delta) : 0)) / period;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return +(100 - 100 / (1 + rs)).toFixed(1);
+}
+
+function calcRSISeries(data, period) {
+  // Returns array of RSI values aligned with data indices (null for first `period` entries)
+  if (!data || data.length < period + 1) return [];
+  const out = new Array(period).fill(null);
+  let avgGain = 0, avgLoss = 0;
+  for (let i = 1; i <= period; i++) {
+    const delta = data[i] - data[i - 1];
+    if (delta > 0) avgGain += delta; else avgLoss += Math.abs(delta);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+  out.push(avgLoss === 0 ? 100 : +(100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+  for (let i = period + 1; i < data.length; i++) {
+    const delta = data[i] - data[i - 1];
+    avgGain = (avgGain * (period - 1) + (delta > 0 ? delta : 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + (delta < 0 ? Math.abs(delta) : 0)) / period;
+    out.push(avgLoss === 0 ? 100 : +(100 - 100 / (1 + avgGain / avgLoss)).toFixed(1));
+  }
+  return out;
+}
+
+// ================================================================
+// RELATIVE STRENGTH VS BENCHMARK
+// ================================================================
+// Computes stock's % change over `period` bars divided by benchmark's % change.
+// RS > 1.0 = outperforming, RS < 1.0 = underperforming.
+function calcRelativeStrength(stockHist, benchHist, period) {
+  if (!stockHist || !benchHist || stockHist.length < period + 1 || benchHist.length < period + 1) return null;
+  const sc = stockHist.map(d => d.c);
+  const bc = benchHist.map(d => d.c);
+  const sn = sc.length, bn = bc.length;
+  const stockChg = (sc[sn - 1] - sc[sn - 1 - period]) / sc[sn - 1 - period];
+  const benchChg = (bc[bn - 1] - bc[bn - 1 - period]) / bc[bn - 1 - period];
+  if (Math.abs(benchChg) < 0.0001) return stockChg > 0 ? 99 : -99; // benchmark flat
+  return +(stockChg / benchChg).toFixed(2);
+}
+
+// ================================================================
+// MULTI-TIMEFRAME CONSOLIDATION DETECTION
+// ================================================================
+const CONSOL_TIMEFRAMES = [
+  { name: "3y",  days: 756, maxRange: 0.45, label: "3-Year" },
+  { name: "1y",  days: 252, maxRange: 0.30, label: "1-Year" },
+  { name: "6m",  days: 126, maxRange: 0.25, label: "6-Month" },
+  { name: "3m",  days: 63,  maxRange: 0.18, label: "3-Month" },
+  { name: "4w",  days: 20,  maxRange: 0.12, label: "4-Week" },
+];
+
+// Timeframe-specific consolidation configs
+// "days" = number of bars to look back (hours for hourly, weeks for weekly)
+const TF_CONSOL = {
+  hourly: [
+    { name: "4w",  days: 130, maxRange: 0.15, label: "4-Week" },
+    { name: "2w",  days: 65,  maxRange: 0.10, label: "2-Week" },
+    { name: "1w",  days: 33,  maxRange: 0.08, label: "1-Week" },
+    { name: "3d",  days: 20,  maxRange: 0.05, label: "3-Day" },
+  ],
+  weekly: [
+    { name: "5y",  days: 260, maxRange: 0.55, label: "5-Year" },
+    { name: "3y",  days: 156, maxRange: 0.45, label: "3-Year" },
+    { name: "1y",  days: 52,  maxRange: 0.30, label: "1-Year" },
+    { name: "6m",  days: 26,  maxRange: 0.22, label: "6-Month" },
+    { name: "3m",  days: 13,  maxRange: 0.15, label: "3-Month" },
+  ],
+};
+
+function detectConsolidation(hist, consolTimeframes) {
+  const cl = hist.map(d => d.c);
+  const n = cl.length;
+  const result = { consolidating: false, label: null, days: 0, rangePct: 0, rangeHigh: 0, rangeLow: 0, crossovers: 0, emaFlatness: null };
+
+  for (const tf of (consolTimeframes || CONSOL_TIMEFRAMES)) {
+    if (n < tf.days) continue;
+    const slice = cl.slice(-tf.days);
+    const high = Math.max(...slice);
+    const low = Math.min(...slice);
+    const rangePct = (high - low) / low;
+
+    if (rangePct <= tf.maxRange) {
+      // Count EMA8/EMA21 crossovers in this window
+      const ema8s = calcEMASeries(cl, 8);
+      const ema21s = calcEMASeries(cl, 21);
+      let crossovers = 0;
+      const startIdx = n - tf.days;
+      for (let i = Math.max(startIdx, 21); i < n; i++) {
+        if (ema8s[i] != null && ema21s[i] != null && ema8s[i-1] != null && ema21s[i-1] != null) {
+          const prev = ema8s[i-1] - ema21s[i-1];
+          const curr = ema8s[i] - ema21s[i];
+          if ((prev > 0 && curr < 0) || (prev < 0 && curr > 0)) crossovers++;
+        }
+      }
+
+      // EMA flatness: avg daily % change of EMA8 over the window
+      let emaDeltas = 0, deltaCount = 0;
+      for (let i = Math.max(startIdx, 8); i < n; i++) {
+        if (ema8s[i] != null && ema8s[i-1] != null && ema8s[i-1] !== 0) {
+          emaDeltas += Math.abs((ema8s[i] - ema8s[i-1]) / ema8s[i-1] * 100);
+          deltaCount++;
+        }
+      }
+      const emaFlatness = deltaCount > 0 ? +(emaDeltas / deltaCount).toFixed(3) : null;
+
+      result.consolidating = true;
+      result.label = tf.label;
+      result.days = tf.days;
+      result.rangePct = +(rangePct * 100).toFixed(1);
+      result.rangeHigh = high;
+      result.rangeLow = low;
+      result.crossovers = crossovers;
+      result.emaFlatness = emaFlatness;
+      return result; // Return longest matching timeframe
+    }
+  }
+
+  // Fallback: short-term EMA flatness check
+  if (n >= 20) {
+    const ema8s = calcEMASeries(cl, 8);
+    let emaDeltas = 0, deltaCount = 0;
+    for (let i = n - 20; i < n; i++) {
+      if (ema8s[i] != null && ema8s[i-1] != null && ema8s[i-1] !== 0) {
+        emaDeltas += Math.abs((ema8s[i] - ema8s[i-1]) / ema8s[i-1] * 100);
+        deltaCount++;
+      }
+    }
+    const flatness = deltaCount > 0 ? emaDeltas / deltaCount : 999;
+    if (flatness < 0.3) {
+      const slice20 = cl.slice(-20);
+      const h20 = Math.max(...slice20), l20 = Math.min(...slice20);
+      result.consolidating = true;
+      result.label = "Short-term";
+      result.days = 20;
+      result.rangePct = +((h20 - l20) / l20 * 100).toFixed(1);
+      result.rangeHigh = h20;
+      result.rangeLow = l20;
+      result.emaFlatness = +flatness.toFixed(3);
+    }
+  }
+  return result;
+}
+
+// Return consolidation info for ALL matching timeframes (for boundary display)
+function detectAllConsolidations(hist, consolTimeframes) {
+  const cl = hist.map(d => d.c);
+  const n = cl.length;
+  const results = [];
+  for (const tf of (consolTimeframes || CONSOL_TIMEFRAMES)) {
+    if (n < tf.days) continue;
+    const slice = cl.slice(-tf.days);
+    const high = Math.max(...slice);
+    const low = Math.min(...slice);
+    const rangePct = (high - low) / low;
+    if (rangePct <= tf.maxRange) {
+      const price = cl[n - 1];
+      const distToHigh = high > 0 ? ((high - price) / price) * 100 : 0;
+      const distToLow = low > 0 ? ((price - low) / price) * 100 : 0;
+      results.push({
+        label: tf.label, days: tf.days, rangePct: +(rangePct * 100).toFixed(1),
+        rangeHigh: +high.toFixed(2), rangeLow: +low.toFixed(2), maxRange: +(tf.maxRange * 100).toFixed(0),
+        distToHigh: +distToHigh.toFixed(2), distToLow: +distToLow.toFixed(2),
+        nearBreakout: distToHigh <= 2.0, nearBreakdown: distToLow <= 2.0,
+        priceInRange: cl[n - 1] <= high && cl[n - 1] >= low,
+      });
+    }
+  }
+  return results;
+}
+
+// ================================================================
+// MAIN CLASSIFY FUNCTION
+// ================================================================
+function classify(hist, hourlyBars, hadBreakout, consolConfig, skipTurn) {
+  if (!hist || hist.length < 22)
+    return { stage: 0, direction: "neutral", rvol: 1, ma5: null, ma8: null, ma10: null, ma20: null, ma21: null, ma50: null };
+
+  const cl = hist.map(d => d.c);
+  const hi = hist.map(d => d.h);
+  const lo = hist.map(d => d.l);
+  const op = hist.map(d => d.o);
+  const vo = hist.map(d => d.v);
+  const n  = cl.length;
+
+  // ── Shared metrics ────────────────────────────────────────────
+  const avgV = vo.slice(-21, -1).reduce((s, v) => s + v, 0) / 20;
+  const rvol = +(vo[n - 1] / (avgV || 1)).toFixed(2);
+  const ema5  = calcEMA(cl, 5);
+  const ema8  = calcEMA(cl, 8);
+  const ema10 = calcEMA(cl, 10);
+  const ema20 = calcEMA(cl, 20);
+  const ema21 = calcEMA(cl, 21);
+  const ema50 = cl.length >= 50 ? calcEMA(cl, 50) : null;
+  const ext   = { rvol, ma5: ema5, ma8: ema8, ma10: ema10, ma20: ema20, ma21: ema21, ma50: ema50 };
+
+  // ── Pre-compute signals used by multiple stages ────────────────
+  const rsi14 = calcRSI(cl, 14);
+  const consol = detectConsolidation(hist, consolConfig);
+  const stackedUp   = ema5 && ema10 && ema20 && ema5 > ema10 && ema10 > ema20;
+  const stackedDown = ema5 && ema10 && ema20 && ema5 < ema10 && ema10 < ema20;
+  const isTrending  = stackedUp || stackedDown;
+
+  // Volume trend: avg volume last 10 bars vs prior 10 bars (for quality scores)
+  const volRecent10 = n >= 20 ? vo.slice(-10).reduce((s,v) => s+v, 0) / 10 : null;
+  const volPrior10  = n >= 20 ? vo.slice(-20, -10).reduce((s,v) => s+v, 0) / 10 : null;
+  const volContracting = volRecent10 && volPrior10 && volPrior10 > 0 ? volRecent10 < volPrior10 * 0.8 : false;
+  const volExpanding   = volRecent10 && volPrior10 && volPrior10 > 0 ? volRecent10 > volPrior10 * 1.3 : false;
+
+  // ================================================================
+  // STAGES IN LIFECYCLE ORDER: 1 → 2 → 3 → 4 → 5 → 6
+  // ================================================================
+
+  // ── Stage 1: Consolidation ────────────────────────────────────────
+  // Sideways range-bound action. Checked first because it's the starting point.
+  if (consol.consolidating) {
+    const { rangeHigh, rangeLow, label, days } = consol;
+    const priceInRange = cl[n - 1] <= rangeHigh && cl[n - 1] >= rangeLow;
+
+    // If price is still INSIDE the range, it's consolidating
+    if (priceInRange) {
+      // Consolidation quality score (0–3 stars)
+      // ★ RSI in neutral zone (38–62) — momentum is flat, not trending
+      // ★ Volume contracting — participation drying up (VCP pattern)
+      // ★ EMA flatness is tight — EMAs converging, coiling for a move
+      const rsiNeutral = rsi14 != null && rsi14 >= 38 && rsi14 <= 62;
+      const emasTight = consol.emaFlatness != null && consol.emaFlatness < 0.2;
+      const consolQuality = (rsiNeutral ? 1 : 0) + (volContracting ? 1 : 0) + (emasTight ? 1 : 0);
+      return {
+        stage: 1, direction: "neutral", ...ext, rsi: rsi14,
+        consolTimeframe: consol.label, consolDays: consol.days, consolRange: consol.rangePct,
+        consolHigh: consol.rangeHigh, consolLow: consol.rangeLow,
+        consolCrossovers: consol.crossovers, emaFlatness: consol.emaFlatness,
+        consolQuality, rsiNeutral, volContracting, emasTight,
+      };
+    }
+
+    // ── Stage 2: Breakout / Breakdown ──────────────────────────────
+    // Price is outside the consolidation range.
+    // Conviction score: RVOL tier + RSI momentum confirmation
+    // Touch count: how many times price tested the boundary before breaking
+    const consolSlice = cl.slice(-Math.min(days, n));
+    const touchHigh = consolSlice.filter(c => c >= rangeHigh * 0.985 && c <= rangeHigh).length;
+    const touchLow = consolSlice.filter(c => c <= rangeLow * 1.015 && c >= rangeLow).length;
+
+    if (cl[n - 1] > rangeHigh && rvol >= 0.7) {
+      const rsiConfirm = rsi14 != null && rsi14 > 60;
+      const conviction = (rvol >= 2.5 ? 3 : rvol >= 1.5 ? 2 : 1) + (rsiConfirm ? 1 : 0);
+      return { stage: 2, direction: "up",   pct: +((cl[n-1]/rangeHigh - 1)*100).toFixed(1),
+               consolTimeframe: label, consolDays: days, consolRange: consol.rangePct,
+               rsi: rsi14, rsiConfirm, conviction, touches: touchHigh, ...ext };
+    }
+    if (cl[n - 1] < rangeLow && rvol >= 0.7) {
+      const rsiConfirm = rsi14 != null && rsi14 < 40;
+      const conviction = (rvol >= 2.5 ? 3 : rvol >= 1.5 ? 2 : 1) + (rsiConfirm ? 1 : 0);
+      return { stage: 2, direction: "down", pct: +((1 - cl[n-1]/rangeLow)*100).toFixed(1),
+               consolTimeframe: label, consolDays: days, consolRange: consol.rangePct,
+               rsi: rsi14, rsiConfirm, conviction, touches: touchLow, ...ext };
+    }
+  }
+
+  // ── Stage 3: Trending ────────────────────────────────────────────
+  // EMA 5d > 10d > 20d stacking. Chain = was there a consolidation
+  // breakout/breakdown before this trend? Check passed-in flag first,
+  // then try to infer from historical bars.
+  if (isTrending) {
+    const dir = stackedUp ? "up" : "down";
+    let chainOk = hadBreakout === true;
+    // Infer chain from historical data if not explicitly tracked
+    if (!chainOk && n >= 60) {
+      // Walk back from ~20 bars ago and look for a consolidation window
+      // that the stock subsequently broke out of
+      for (let lookback = 20; lookback <= Math.min(n - 20, 120); lookback += 10) {
+        const oldSlice = hist.slice(Math.max(0, n - lookback - 30), n - lookback);
+        if (oldSlice.length < 20) continue;
+        const oldConsol = detectConsolidation(oldSlice, consolConfig);
+        if (oldConsol.consolidating) {
+          // Was there a breakout from that range?
+          const postBreakBars = hist.slice(n - lookback, n - lookback + 5);
+          if (postBreakBars.length > 0) {
+            const brokeUp = postBreakBars.some(b => b.c > oldConsol.rangeHigh);
+            const brokeDown = postBreakBars.some(b => b.c < oldConsol.rangeLow);
+            if ((dir === "up" && brokeUp) || (dir === "down" && brokeDown)) {
+              chainOk = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // ── Stage 4 & 5: Exhaustion → Turn ──────────────────────────
+    // Two detection modes:
+    //   DAILY/WEEKLY: gap-based (≥3 directional gaps + expanding ranges + significant move)
+    //   HOURLY: composite (RSI extreme + volume climax + acceleration) — no gaps on intraday
+    const isHourlyTf = consolConfig === TF_CONSOL.hourly;
+    let isExhausting = false;
+    let exhaustDir = dir; // default to trend direction
+    let exhaustMeta = {};
+
+    if (isHourlyTf && n >= 20) {
+      // ── HOURLY EXHAUSTION: RSI divergence + volume climax + acceleration ──
+      const rsi = calcRSI(cl, 14);
+      const rsiSeries = calcRSISeries(cl, 14);
+
+      // Signal 1: RSI extreme (>78 or <22) — momentum stretched
+      const rsiExtreme = rsi != null && (
+        (dir === "up" && rsi > 78) || (dir === "down" && rsi < 22)
+      );
+
+      // Signal 1b: RSI divergence — price making new highs/lows but RSI isn't
+      let rsiDivergence = false;
+      if (rsi != null && n >= 10 && rsiSeries.length >= n) {
+        const priceLast5High = Math.max(...cl.slice(-5));
+        const pricePrev5High = Math.max(...cl.slice(-10, -5));
+        const rsiLast5High = Math.max(...rsiSeries.slice(-5).filter(v => v != null));
+        const rsiPrev5High = Math.max(...rsiSeries.slice(-10, -5).filter(v => v != null));
+        const priceLast5Low = Math.min(...cl.slice(-5));
+        const pricePrev5Low = Math.min(...cl.slice(-10, -5));
+        const rsiLast5Low = Math.min(...rsiSeries.slice(-5).filter(v => v != null));
+        const rsiPrev5Low = Math.min(...rsiSeries.slice(-10, -5).filter(v => v != null));
+        if (dir === "up" && priceLast5High > pricePrev5High && rsiLast5High < rsiPrev5High)
+          rsiDivergence = true;
+        if (dir === "down" && priceLast5Low < pricePrev5Low && rsiLast5Low > rsiPrev5Low)
+          rsiDivergence = true;
+      }
+
+      // Signal 2: Volume climax — recent 3 bars avg volume ≥ 2x the 20-bar avg
+      const recentVol3 = vo.slice(-3).reduce((s, v) => s + v, 0) / 3;
+      const avgVol20 = vo.slice(-23, -3).reduce((s, v) => s + v, 0) / 20;
+      const volClimax = avgVol20 > 0 && recentVol3 >= avgVol20 * 2;
+      // Also check if bar ranges are wide (bars expanding)
+      const recentRange3 = hist.slice(-3).map(d => d.h - d.l).reduce((s, v) => s + v, 0) / 3;
+      const priorRange5 = hist.slice(-8, -3).map(d => d.h - d.l).reduce((s, v) => s + v, 0) / 5;
+      const barsExpanding = priorRange5 > 0 && recentRange3 > priorRange5 * 1.2;
+
+      // Signal 3: Acceleration — last 5 bars moved more than prior 10 bars
+      const moveLast5 = Math.abs(cl[n - 1] - cl[Math.max(0, n - 5)]);
+      const movePrior10 = Math.abs(cl[Math.max(0, n - 5)] - cl[Math.max(0, n - 15)]);
+      const accelerating = movePrior10 > 0 && moveLast5 > movePrior10 * 0.8;
+
+      // Count how many signals fire (need ≥2 of the composite signals)
+      const signals = [
+        rsiExtreme || rsiDivergence,
+        volClimax && barsExpanding,
+        accelerating,
+      ];
+      const signalCount = signals.filter(Boolean).length;
+      isExhausting = signalCount >= 2;
+      exhaustMeta = {
+        rsi, rsiExtreme, rsiDivergence, volClimax, barsExpanding, accelerating, signalCount,
+        recentVolRatio: avgVol20 > 0 ? +(recentVol3 / avgVol20).toFixed(1) : null,
+      };
+
+    } else if (n >= 7) {
+      // ── DAILY/WEEKLY EXHAUSTION: gap-based detection (original logic) ──
+      const sl = hist.slice(-7);
+      const gs = [];
+      for (let i = 1; i < sl.length; i++) {
+        const g = sl[i].o - sl[i - 1].c;
+        if (Math.abs(g) / sl[i - 1].c > 0.002) gs.push(g);
+      }
+      const gu = gs.filter(g => g > 0).length;
+      const gd = gs.filter(g => g < 0).length;
+      const r5  = hist.slice(-5).map(d => d.h - d.l);
+      const rp5 = hist.slice(-10, -5).map(d => d.h - d.l);
+      const ar  = r5.reduce((s, v) => s + v, 0) / 5;
+      const ap  = rp5.reduce((s, v) => s + v, 0) / 5;
+      const expanding = ap > 0 && ar > ap * 1.1;
+      const moved     = Math.abs(cl[n - 1] - cl[n - 7]) / cl[n - 7] > 0.03;
+      isExhausting = (gu >= 3 || gd >= 3) && expanding && moved;
+      exhaustDir = gu >= 3 ? "up" : "down";
+    }
+
+    if (isExhausting) {
+      // ── Stage 5: The Turn (snapback after exhaustion) ────────
+      // Only on shorter timeframes (hourly/daily). Skipped on weekly.
+      // Uses 30-min sub-bars for intraday detection on daily TF.
+      if (!skipTurn) {
+        const trend = exhaustDir;
+
+        if (!isHourlyTf) {
+          // INTRADAY path: 30-min bars (first candle after gap) — daily TF only
+          if (n >= 4 && hourlyBars && hourlyBars.length > 0) {
+            const latestDate = hourlyBars[hourlyBars.length - 1].date;
+            const todayBars = hourlyBars.filter(b => b.date === latestDate);
+            if (todayBars.length >= 1) {
+              const firstBar = todayBars[0];
+              const preDayBars = hourlyBars.filter(b => b.date !== latestDate);
+              const prevClose = cl[n - 2];
+              const ydClose = preDayBars.length > 0 ? preDayBars[preDayBars.length - 1].c : prevClose;
+              const gapPct = (firstBar.o - ydClose) / ydClose;
+              const gapUp   = gapPct >  0.01 && trend === "up";
+              const gapDown = gapPct < -0.01 && trend === "down";
+              if (gapUp && firstBar.c < firstBar.o)
+                return { stage: 5, direction: "toDown", gapPct: +(gapPct * 100).toFixed(1),
+                         intradayDetected: true, wasExhausting: true, ...ext };
+              if (gapDown && firstBar.c > firstBar.o)
+                return { stage: 5, direction: "toUp", gapPct: +(gapPct * 100).toFixed(1),
+                         intradayDetected: true, wasExhausting: true, ...ext };
+            }
+          }
+
+          // DAILY fallback: gap in exhaustion direction + close reversal
+          if (n >= 4) {
+            const gapPct = (op[n - 1] - cl[n - 2]) / cl[n - 2];
+            if (gapPct >  0.012 && trend === "up"   && cl[n - 1] < op[n - 1])
+              return { stage: 5, direction: "toDown", gapPct: +(gapPct * 100).toFixed(1),
+                       intradayDetected: false, wasExhausting: true, ...ext };
+            if (gapPct < -0.012 && trend === "down"  && cl[n - 1] > op[n - 1])
+              return { stage: 5, direction: "toUp",   gapPct: +(gapPct * 100).toFixed(1),
+                       intradayDetected: false, wasExhausting: true, ...ext };
+          }
+        } else {
+          // HOURLY Turn: RSI reversal from extreme — last bar reverses direction
+          const rsi = exhaustMeta.rsi;
+          const lastBar = hist[n - 1];
+          const prevBar = hist[n - 2];
+          if (rsi != null) {
+            // Bearish turn: was exhausting up, last bar closes below open with RSI rolling off high
+            if (trend === "up" && lastBar.c < lastBar.o && lastBar.c < prevBar.c)
+              return { stage: 5, direction: "toDown", rsi,
+                       intradayDetected: true, wasExhausting: true, hourlyExhaust: true, ...exhaustMeta, ...ext };
+            // Bullish turn: was exhausting down, last bar closes above open with RSI bouncing off low
+            if (trend === "down" && lastBar.c > lastBar.o && lastBar.c > prevBar.c)
+              return { stage: 5, direction: "toUp", rsi,
+                       intradayDetected: true, wasExhausting: true, hourlyExhaust: true, ...exhaustMeta, ...ext };
+          }
+        }
+      }
+
+      // No turn detected — still exhausting
+      return { stage: 4, direction: exhaustDir, wasTrending: true, hourlyExhaust: isHourlyTf,
+               ...exhaustMeta, ...ext };
+    }
+
+    // ── Stage 4 alternative: Volume capitulation (DOWNSIDE ONLY) ──
+    // Asymmetric: blow-off selling at lows is a real phenomenon.
+    // Blow-off buying at highs is much rarer — tops grind, bottoms crash.
+    // Triggers on a single bar with: trending down + volume ≥ 3x avg +
+    // wide-range bar (≥1.5x avg range) + RSI below 25.
+    // Does NOT require multiple gaps — one capitulation bar is enough.
+    if (!isHourlyTf && dir === "down" && n >= 20) {
+      const lastVol = vo[n - 1];
+      const avgVol20 = vo.slice(-21, -1).reduce((s, v) => s + v, 0) / 20;
+      const lastRange = hi[n - 1] - lo[n - 1];
+      const avgRange10 = hist.slice(-11, -1).map(d => d.h - d.l).reduce((s, v) => s + v, 0) / 10;
+      const volSpike = avgVol20 > 0 && lastVol >= avgVol20 * 3;
+      const wideBar = avgRange10 > 0 && lastRange >= avgRange10 * 1.5;
+      const rsiCapit = rsi14 != null && rsi14 < 25;
+      // Need volume spike + at least one of (wide bar, RSI extreme)
+      if (volSpike && (wideBar || rsiCapit)) {
+        const capitMeta = {
+          capitulation: true, volSpike: +(lastVol / avgVol20).toFixed(1),
+          wideBar, rsiCapit, rsi: rsi14,
+        };
+
+        // Check for immediate turn (capitulation reversal):
+        // If the last bar closed in the upper half of its range, the selling
+        // was absorbed — potential hammer / reversal bar
+        if (!skipTurn) {
+          const closeInUpperHalf = lastRange > 0 && (cl[n-1] - lo[n-1]) / lastRange > 0.55;
+          if (closeInUpperHalf) {
+            return { stage: 5, direction: "toUp", ...capitMeta,
+                     intradayDetected: false, wasExhausting: true, ...ext };
+          }
+        }
+
+        return { stage: 4, direction: "down", wasTrending: true, ...capitMeta, ...ext };
+      }
+    }
+
+    // ── Stage 6: Follow-Through (confirmation after a turn) ──────
+    if (n >= 6) {
+      const rng = hi[n - 1] - lo[n - 1];
+      const nH  = rng > 0 && (cl[n - 1] - lo[n - 1]) / rng > 0.72;
+      const nL  = rng > 0 && (cl[n - 1] - lo[n - 1]) / rng < 0.28;
+      const pt  = cl[n - 5] > cl[Math.max(0, n - 10)] ? "up" : "down";
+      if (pt === "down" && cl[n - 1] > cl[n - 4] && nH && rvol > 1.05)
+        return { stage: 6, direction: "up",   ...ext };
+      if (pt === "up"   && cl[n - 1] < cl[n - 4] && nL && rvol > 1.05)
+        return { stage: 6, direction: "down", ...ext };
+    }
+
+    // Still trending, no exhaustion/turn/follow-through detected
+    return { stage: 3, direction: dir, chainConfirmed: chainOk,
+             emaStack: stackedUp ? "5>10>20" : "5<10<20", ...ext };
+  }
+
+  // ── Stage 4 exception: massive move without EMA stacking ────────
+  // Only if the stock moved ≥30% in ~2 weeks — pace is unsustainable
+  // even without classic EMA stacking (e.g., parabolic biotech)
+  if (n >= 10) {
+    const move2w = Math.abs(cl[n - 1] - cl[n - 10]) / cl[n - 10];
+    if (move2w >= 0.30) {
+      const dir = cl[n - 1] > cl[n - 10] ? "up" : "down";
+      return { stage: 4, direction: dir, wasTrending: false,
+               massiveMove: +(move2w * 100).toFixed(1), ...ext };
+    }
+  }
+
+  // ── Hibernation: doesn't fit any stage ─────────────────────────
+  // Not consolidating in a defined range, not trending, not breaking out.
+  return { stage: 0, direction: "neutral", ...ext };
+}
+
+// ================================================================
+// LEARNING ENGINE — learns from manual stage overrides
+// ================================================================
+const FEEDBACK_KEY = "stageTracker_feedback_v1";
+
+function loadFeedback() {
+  try { return JSON.parse(localStorage.getItem(FEEDBACK_KEY) || "[]"); }
+  catch { return []; }
+}
+function saveFeedback(fb) {
+  try { localStorage.setItem(FEEDBACK_KEY, JSON.stringify(fb.slice(-200))); }
+  catch {}
+}
+
+function captureSnapshot(analysis, price) {
+  if (!analysis) return null;
+  const a = analysis;
+  return {
+    rvol: a.rvol ?? null, price: price ?? null, autoStage: a.stage, direction: a.direction,
+    pVsMa5:     a.ma5 && price ? +(price / a.ma5 - 1).toFixed(4) : null,
+    pVsMa10:    a.ma10 && price ? +(price / a.ma10 - 1).toFixed(4) : null,
+    pVsMa20:    a.ma20 && price ? +(price / a.ma20 - 1).toFixed(4) : null,
+    pVsMa50:    a.ma50 && price ? +(price / a.ma50 - 1).toFixed(4) : null,
+    ma5VsMa10:  a.ma5 && a.ma10 ? +(a.ma5 / a.ma10 - 1).toFixed(4) : null,
+    ma10VsMa20: a.ma10 && a.ma20 ? +(a.ma10 / a.ma20 - 1).toFixed(4) : null,
+    ma5VsMa20:  a.ma5 && a.ma20 ? +(a.ma5 / a.ma20 - 1).toFixed(4) : null,
+  };
+}
+
+function snapshotDistance(a, b) {
+  if (!a || !b) return Infinity;
+  const fields = ["pVsMa5","pVsMa10","pVsMa20","pVsMa50","ma5VsMa10","ma10VsMa20","ma5VsMa20","rvol"];
+  let sum = 0, count = 0;
+  for (const f of fields) {
+    if (a[f] != null && b[f] != null) {
+      const scale = f === "rvol" ? 0.5 : 1;
+      sum += Math.pow((a[f] - b[f]) * scale, 2);
+      count++;
+    }
+  }
+  if (count < 3) return Infinity;
+  return Math.sqrt(sum / count);
+}
+
+function queryFeedback(currentSnap) {
+  const fb = loadFeedback();
+  if (fb.length === 0 || !currentSnap) return null;
+  let bestMatch = null, bestDist = Infinity;
+  for (const entry of fb) {
+    if (entry.snapshot?.autoStage !== currentSnap.autoStage) continue;
+    const dist = snapshotDistance(currentSnap, entry.snapshot);
+    if (dist < 0.015 && dist < bestDist) { bestDist = dist; bestMatch = entry; }
+  }
+  if (!bestMatch) return null;
+  const ageDays = (Date.now() - (bestMatch.ts || 0)) / 86400000;
+  const recencyBoost = Math.max(0.5, 1 - ageDays / 90);
+  const agreeing = fb.filter(e =>
+    e.snapshot?.autoStage === currentSnap.autoStage &&
+    e.toStage === bestMatch.toStage &&
+    snapshotDistance(currentSnap, e.snapshot) < 0.025
+  ).length;
+  return { stage: bestMatch.toStage, confidence: Math.min(0.95, (0.6 + agreeing * 0.1) * recencyBoost),
+           reason: bestMatch.reason, distance: +bestDist.toFixed(4), agreeing };
+}
+
+function recordFeedback(sym, fromStage, toStage, reason, snapshot, timeframe) {
+  const fb = loadFeedback();
+  fb.push({ sym, fromStage, toStage, reason, snapshot, timeframe: timeframe || "daily", ts: Date.now(), date: new Date().toISOString().slice(0, 10) });
+  saveFeedback(fb);
+}
+
+// ================================================================
+// DATA FETCHING — multi-proxy with crumb auth
+// ================================================================
+function parseChart(js, dateOnly) {
+  const r = js?.chart?.result?.[0];
+  if (!r) return { bars: [], meta: {} };
+  const meta = r.meta;
+  const ts = r.timestamp || [];
+  const q = r.indicators?.quote?.[0] || {};
+  const bars = ts.map((t, i) => {
+    const d = new Date(t * 1000);
+    return { date: d.toISOString().slice(0, 10), ts: t, hour: d.getHours(), min: d.getMinutes(),
+             o: q.open?.[i], h: q.high?.[i], l: q.low?.[i], c: q.close?.[i], v: q.volume?.[i] };
+  }).filter(d => d.c != null && d.c > 0 && d.o != null);
+  return { bars, meta };
+}
+
+const CORS_PROXIES = [
+  url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+let activeProxyIdx = 0;
+
+function fetchWithTimeout(url, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
+async function fetchViaProxy(url, timeoutMs = 25000, expectJson = false) {
+  const startIdx = activeProxyIdx;
+  let lastErr = null;
+  for (let attempt = 0; attempt < CORS_PROXIES.length; attempt++) {
+    const idx = (startIdx + attempt) % CORS_PROXIES.length;
+    const proxyUrl = CORS_PROXIES[idx](url);
+    try {
+      const res = await fetchWithTimeout(proxyUrl, timeoutMs);
+      if (!res.ok) {
+        console.warn(`Proxy ${idx} HTTP ${res.status}`);
+        lastErr = new Error(`HTTP ${res.status}`);
+        continue;
+      }
+      // When we expect JSON, clone & peek at the body to catch HTML error pages
+      if (expectJson) {
+        const clone = res.clone();
+        const text = await clone.text();
+        const trimmed = text.trimStart();
+        // Valid JSON starts with { or [, not < (HTML) or letters (error pages)
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+          const preview = trimmed.slice(0, 60).replace(/\n/g, " ");
+          console.warn(`Proxy ${idx} returned non-JSON: "${preview}"`);
+          lastErr = new Error(`Proxy returned HTML/text instead of JSON`);
+          continue;
+        }
+      }
+      activeProxyIdx = idx;
+      return res;
+    } catch (e) {
+      console.warn(`Proxy ${idx} failed:`, e.message);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("All CORS proxies failed");
+}
+
+let yahooAuth = { crumb: null, fetched: false, ts: 0 };
+
+async function getYahooCrumb() {
+  if (yahooAuth.fetched && Date.now() - yahooAuth.ts < 600000) return yahooAuth.crumb;
+  try {
+    const res = await fetchViaProxy("https://query2.finance.yahoo.com/v1/test/getcrumb", 10000);
+    const text = await res.text();
+    if (text && text.length < 50 && !text.includes("<")) {
+      yahooAuth = { crumb: text.trim(), fetched: true, ts: Date.now() };
+      return yahooAuth.crumb;
+    }
+  } catch (e) { console.warn("Crumb fetch failed:", e.message); }
+  try {
+    const res = await fetchViaProxy("https://finance.yahoo.com/quote/SPY", 12000);
+    const html = await res.text();
+    const match = html.match(/"crumb"\s*:\s*"([^"]+)"/);
+    if (match) { yahooAuth = { crumb: match[1], fetched: true, ts: Date.now() }; return yahooAuth.crumb; }
+  } catch (e) { console.warn("Page crumb failed:", e.message); }
+  yahooAuth = { crumb: null, fetched: true, ts: Date.now() };
+  return null;
+}
+
+function yahooChartUrl(sym, range, interval) {
+  let url = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?range=${range}&interval=${interval}&includePrePost=false`;
+  if (yahooAuth.crumb) url += `&crumb=${encodeURIComponent(yahooAuth.crumb)}`;
+  return url;
+}
+
+async function fetchDaily(sym) {
+  const res = await fetchViaProxy(yahooChartUrl(sym, "3y", "1d"), 25000, true);
+  const js = await res.json();
+  if (js?.chart?.error) throw new Error(js.chart.error.description || "Yahoo API error");
+  const parsed = parseChart(js, true);
+  if (parsed.bars.length === 0) throw new Error("No daily bars returned");
+  return parsed;
+}
+
+async function fetch30Min(sym) {
+  const res = await fetchViaProxy(yahooChartUrl(sym, "5d", "30m"), 12000, true);
+  const js = await res.json();
+  if (js?.chart?.error) throw new Error(js.chart.error.description || "Yahoo API error");
+  return parseChart(js, false);
+}
+
+async function fetchHourlyFull(sym) {
+  const res = await fetchViaProxy(yahooChartUrl(sym, "1mo", "1h"), 15000, true);
+  const js = await res.json();
+  if (js?.chart?.error) throw new Error(js.chart.error.description || "Yahoo API error");
+  return parseChart(js, false);
+}
+
+async function fetchWeekly(sym) {
+  const res = await fetchViaProxy(yahooChartUrl(sym, "5y", "1wk"), 25000, true);
+  const js = await res.json();
+  if (js?.chart?.error) throw new Error(js.chart.error.description || "Yahoo API error");
+  return parseChart(js, true);
+}
+
+async function fetchTicker(sym) {
+  await getYahooCrumb();
+  const [dailyResult, hourlyResult, weeklyResult, turnResult] = await Promise.allSettled([
+    fetchDaily(sym), fetchHourlyFull(sym), fetchWeekly(sym), fetch30Min(sym)
+  ]);
+  if (dailyResult.status !== "fulfilled") throw dailyResult.reason || new Error("Daily fetch failed");
+  const { bars: hist, meta } = dailyResult.value;
+  const hourlyBars = hourlyResult.status === "fulfilled" ? hourlyResult.value.bars : [];
+  const weeklyBars = weeklyResult.status === "fulfilled" ? weeklyResult.value.bars : [];
+  const turnBars   = turnResult.status === "fulfilled" ? turnResult.value.bars : [];
+  const prev  = meta.chartPreviousClose ?? meta.previousClose ?? (hist.length > 1 ? hist[hist.length-2].c : null);
+  const price = meta.regularMarketPrice ?? (hist.length ? hist[hist.length-1].c : null);
+  const chg   = price != null && prev != null ? price - prev : null;
+  const pct   = chg != null && prev ? (chg / prev) * 100 : null;
+  const now = Date.now();
+  // Daily classify uses 30-min bars for turn detection
+  const analysis = classify(hist, turnBars.length > 0 ? turnBars : null);
+  analysis.classifiedAt = now;
+  analysis.classifiedPrice = price;
+  // Hourly classify — turn detection uses bar-level gaps (no sub-bars)
+  const hourlyAnalysis = hourlyBars.length >= 22 ? classify(hourlyBars, null, false, TF_CONSOL.hourly) : null;
+  if (hourlyAnalysis) { hourlyAnalysis.classifiedAt = now; hourlyAnalysis.classifiedPrice = price; }
+  // Weekly classify — turn detection skipped (too slow for snapbacks)
+  const weeklyAnalysis = weeklyBars.length >= 22 ? classify(weeklyBars, null, false, TF_CONSOL.weekly, true) : null;
+  if (weeklyAnalysis) { weeklyAnalysis.classifiedAt = now; weeklyAnalysis.classifiedPrice = price; }
+  // Consolidation boundaries for all matching timeframes
+  const consolBounds = {
+    daily: detectAllConsolidations(hist),
+    hourly: hourlyBars.length >= 22 ? detectAllConsolidations(hourlyBars, TF_CONSOL.hourly) : [],
+    weekly: weeklyBars.length >= 22 ? detectAllConsolidations(weeklyBars, TF_CONSOL.weekly) : [],
+  };
+  // Pre/post market prices from Yahoo meta
+  const preMarket = meta.preMarketPrice ? {
+    price: meta.preMarketPrice,
+    chg: meta.preMarketChange ?? null,
+    pct: meta.preMarketChangePercent ? +(meta.preMarketChangePercent * 100).toFixed(2) : null,
+    time: meta.preMarketTime ? new Date(meta.preMarketTime * 1000) : null,
+  } : null;
+  const postMarket = meta.postMarketPrice ? {
+    price: meta.postMarketPrice,
+    chg: meta.postMarketChange ?? null,
+    pct: meta.postMarketChangePercent ? +(meta.postMarketChangePercent * 100).toFixed(2) : null,
+    time: meta.postMarketTime ? new Date(meta.postMarketTime * 1000) : null,
+  } : null;
+
+  return { sym, price, prev, chg, pct, volume: meta.regularMarketVolume,
+    avgVol: meta.averageDailyVolume10Day ?? meta.averageDailyVolume3Month,
+    hist, hourlyBars, weeklyBars, turnBars, analysis, hourlyAnalysis, weeklyAnalysis,
+    consolBounds, preMarket, postMarket,
+    autoStage: analysis.stage, loaded: true, err: null, ts: Date.now() };
+}
+
+async function fetchTurnData(sym) {
+  await getYahooCrumb();
+  const { bars } = await fetch30Min(sym);
+  return bars;
+}
+
+function getETInfo() {
+  const now = new Date();
+  const et = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const h = et.getHours(), m = et.getMinutes(), day = et.getDay();
+  const mins = h * 60 + m;
+  const isWeekday = day >= 1 && day <= 5;
+  return {
+    isMarketOpen: isWeekday && mins >= 570 && mins <= 960,
+    isFirstWindow: isWeekday && mins >= 625 && mins <= 690,
+    isMorning: isWeekday && mins >= 570 && mins <= 720,
+    etTime: `${h}:${m.toString().padStart(2,"0")} ET`,
+  };
+}
+
+// ================================================================
+// HELPERS
+// ================================================================
+const fmtP = p => p == null ? "—" : p >= 1000 ? p.toFixed(0) : p >= 100 ? p.toFixed(2) : p.toFixed(3);
+const fmtCnt = ms => { const m=Math.floor(ms/60000), s=Math.floor(ms%60000/1000); return `${m}:${s.toString().padStart(2,"0")}`; };
+const fmtVol = v => { if (!v) return "—"; if (v>=1e9) return (v/1e9).toFixed(1)+"B"; if (v>=1e6) return (v/1e6).toFixed(1)+"M"; return (v/1e3).toFixed(0)+"K"; };
+const fmtTime = ts => {
+  if (!ts) return "";
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const time = d.toLocaleTimeString([], { hour:"numeric", minute:"2-digit" });
+  return sameDay ? time : `${d.toLocaleDateString([], { month:"short", day:"numeric" })} ${time}`;
+};
+
+// ================================================================
+// STOCK CARD
+// ================================================================
+function StockCard({ sym, d, effStage, isLoading, isManual, onClick, showNearBreak, tfAnalysis, viewTf, relStrength }) {
+  const s  = STAGES[effStage] || STAGES[1];
+  const up = d?.pct >= 0;
+  // Use the timeframe-specific analysis for display
+  const an = tfAnalysis || d?.analysis;
+  const noTfData = viewTf !== "daily" && !tfAnalysis && d?.loaded;
+  const rv = an?.rvol;
+  const dir = an?.direction;
+  return (
+    <div className="card" onClick={onClick} style={{
+      background: "#0d1324", border: `1px solid ${effStage ? s.border : "#1e293b"}`,
+      borderRadius: "10px", padding: "14px", cursor: "pointer",
+      boxShadow: effStage ? `0 0 14px ${s.glow}` : undefined,
+      minHeight: "140px", display: "flex", flexDirection: "column", gap: "3px",
+    }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <span style={{ fontSize:"15px", fontWeight:"800", letterSpacing:"0.06em", color:"#f8fafc" }}>{sym}</span>
+        <div style={{ display:"flex", gap:"4px", alignItems:"center" }}>
+          {isManual && <span style={{ fontSize:"9px", color:"#94a3b8", background:"#1e293b", padding:"1px 5px", borderRadius:"3px" }}>MANUAL</span>}
+          {isLoading && !d && <span className="spin" style={{ fontSize:"12px", color:"#475569" }}>⟳</span>}
+        </div>
+      </div>
+
+      {d?.price != null ? (
+        <div>
+          <div style={{ display:"flex", alignItems:"baseline", gap:"6px", marginTop:"2px" }}>
+            <span style={{ fontSize:"18px", fontWeight:"700", color:"#f8fafc" }}>${fmtP(d.price)}</span>
+            <span style={{ fontSize:"12px", fontWeight:"700", color: up?"#4ade80":"#f87171" }}>
+              {up?"▲":"▼"}{Math.abs(d.pct).toFixed(2)}%
+            </span>
+          </div>
+          {(d.preMarket || d.postMarket) && (
+            <div style={{ fontSize:"9px", marginTop:"1px", color:"#64748b" }}>
+              {d.preMarket && (
+                <span style={{ marginRight:"8px" }}>
+                  <span style={{ color:"#475569" }}>Pre:</span>{" "}
+                  <span style={{ fontWeight:"700" }}>${fmtP(d.preMarket.price)}</span>
+                  {d.preMarket.pct != null && (
+                    <span style={{ color: d.preMarket.pct >= 0 ? "#4ade80" : "#f87171", marginLeft:"3px" }}>
+                      {d.preMarket.pct >= 0 ? "+" : ""}{d.preMarket.pct}%
+                    </span>
+                  )}
+                </span>
+              )}
+              {d.postMarket && (
+                <span>
+                  <span style={{ color:"#475569" }}>Post:</span>{" "}
+                  <span style={{ fontWeight:"700" }}>${fmtP(d.postMarket.price)}</span>
+                  {d.postMarket.pct != null && (
+                    <span style={{ color: d.postMarket.pct >= 0 ? "#4ade80" : "#f87171", marginLeft:"3px" }}>
+                      {d.postMarket.pct >= 0 ? "+" : ""}{d.postMarket.pct}%
+                    </span>
+                  )}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontSize:"11px", color: d?.err?"#ef4444":"#475569", marginTop:"4px", wordBreak:"break-word" }}>
+          {d?.err ? `⚠ ${d.err}` : isLoading ? "Loading…" : "No data"}
+        </div>
+      )}
+
+      <div style={{ marginTop:"8px", display:"flex", alignItems:"center", gap:"6px" }}>
+        <span style={{
+          display:"inline-flex", alignItems:"center", gap:"4px",
+          padding:"3px 9px", borderRadius:"4px", fontSize:"11px", fontWeight:"800",
+          background:`${s.color}18`, border:`1px solid ${s.border}`, color:s.color,
+        }}>
+          {s.icon} S{effStage}: {s.name}
+        </span>
+        {viewTf && viewTf !== "daily" && (
+          <span style={{ fontSize:"9px", color:"#475569", fontWeight:"700", textTransform:"uppercase" }}>{viewTf}</span>
+        )}
+      </div>
+      <div style={{ color:"#64748b", fontSize:"10px", marginTop:"1px" }}>{s.strategy}</div>
+      {an?.classifiedAt && (
+        <div style={{ fontSize:"9px", color:"#475569", marginTop:"1px" }}>
+          {fmtTime(an.classifiedAt)}{an.classifiedPrice != null && ` @ $${fmtP(an.classifiedPrice)}`}
+        </div>
+      )}
+      {noTfData && (
+        <div style={{ fontSize:"9px", color:"#475569", marginTop:"2px", fontStyle:"italic" }}>No {viewTf} data</div>
+      )}
+
+      {effStage === 1 && an?.consolTimeframe && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color:"#94a3b8" }}>
+          {an.consolTimeframe} range · {an.consolRange}%
+          {an.consolQuality != null && (
+            <span style={{ marginLeft:"6px", color: an.consolQuality >= 3 ? "#22c55e" : an.consolQuality >= 2 ? "#fbbf24" : "#475569" }}>
+              {"★".repeat(an.consolQuality)}{"☆".repeat(3 - an.consolQuality)}
+            </span>
+          )}
+          {an.consolHigh && an.consolLow && (
+            <div style={{ fontSize:"9px", color:"#64748b", marginTop:"1px" }}>
+              <span style={{ color:"#f87171" }}>${fmtP(an.consolLow)}</span>
+              {" — "}
+              <span style={{ color:"#4ade80" }}>${fmtP(an.consolHigh)}</span>
+              {an.volContracting && <span style={{ marginLeft:"4px", color:"#22c55e" }}>Vol↓</span>}
+              {an.rsi != null && <span style={{ marginLeft:"4px", color:"#475569" }}>RSI {an.rsi}</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {effStage === 2 && an?.consolTimeframe && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color: an?.direction === "up" ? "#4ade80" : "#f87171" }}>
+          {an?.direction === "up" ? "▲" : "▼"} Breaking {an.consolTimeframe} range {an?.pct && `+${an.pct}%`}
+          {an?.conviction != null && (
+            <span style={{ marginLeft:"6px", fontSize:"9px", color: an.conviction >= 3 ? "#22c55e" : an.conviction >= 2 ? "#fbbf24" : "#64748b", fontWeight:"800" }}>
+              {an.conviction >= 3 ? "HIGH" : an.conviction >= 2 ? "MED" : "LOW"}
+            </span>
+          )}
+          {an?.rsi != null && <span style={{ fontSize:"9px", marginLeft:"4px", color:"#475569" }}>RSI {an.rsi}</span>}
+          <div style={{ fontSize:"9px", color:"#64748b", marginTop:"1px" }}>
+            {an?.touches != null && an.touches > 0 && (
+              <span style={{ color: an.touches >= 3 ? "#22c55e" : "#94a3b8", marginRight:"8px" }}>
+                {an.touches}x tested
+              </span>
+            )}
+            {relStrength != null && (
+              <span style={{ color: relStrength > 1.5 ? "#22c55e" : relStrength > 1.0 ? "#94a3b8" : "#f87171" }}>
+                RS {relStrength}x
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+      {effStage === 3 && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color: an?.chainConfirmed ? "#38bdf8" : "#fbbf24" }}>
+          {an?.direction === "up" ? "▲ Trending higher" : "▼ Trending lower"}
+          {an?.emaStack && ` · ${an.emaStack}`}
+          {an?.chainConfirmed != null && (an.chainConfirmed ? " ✓" : " ⚠ No chain")}
+        </div>
+      )}
+      {effStage === 4 && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color:"#f59e0b" }}>
+          {an?.direction === "up" ? "▲ Exhausting higher" : "▼ Exhausting lower"}
+          {an?.massiveMove ? ` · ${an.massiveMove}% in 2wk` : ""}
+          {an?.capitulation && (
+            <div style={{ fontSize:"9px", color:"#ef4444", marginTop:"1px", fontWeight:"700" }}>
+              💥 Capitulation · Vol {an.volSpike}x avg
+              {an.rsi != null && ` · RSI ${an.rsi}`}
+              {an.wideBar && " · Wide bar"}
+            </div>
+          )}
+          {an?.hourlyExhaust && (
+            <div style={{ fontSize:"9px", color:"#d97706", marginTop:"1px" }}>
+              {an.rsi != null && `RSI ${an.rsi}`}
+              {an.volClimax && ` · Vol ${an.recentVolRatio}x`}
+              {an.accelerating && " · Accel"}
+              {an.rsiDivergence && " · Divergence"}
+            </div>
+          )}
+        </div>
+      )}
+      {effStage === 5 && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color:"#ef4444" }}>
+          Snapback {an?.gapPct ? `gap ${an.gapPct}%` : ""} · Post-exhaustion
+        </div>
+      )}
+      {an?.learnedOverride && (
+        <div style={{ fontSize:"10px", marginTop:"2px", color:"#22c55e" }}>🧠 Learned</div>
+      )}
+
+      {(d?.hourlyAnalysis || d?.weeklyAnalysis) && (() => {
+        const hs = d?.hourlyAnalysis?.stage, ws = d?.weeklyAnalysis?.stage, ds = effStage;
+        const hasAll = hs != null && ws != null;
+        const allSame = hasAll && hs === ds && ds === ws;
+        const twoMatch = hasAll && (hs === ds || ds === ws || hs === ws);
+        return (
+          <div style={{ display:"flex", gap:"3px", marginTop:"4px", fontSize:"9px", fontWeight:"700", alignItems:"center", flexWrap:"wrap" }}>
+            {hs != null && <span style={{ color: STAGES[hs]?.color || "#475569", background:`${STAGES[hs]?.color || "#475569"}15`, padding:"1px 5px", borderRadius:"3px" }}>H:S{hs}</span>}
+            <span style={{ color: STAGES[ds]?.color || "#475569", background:`${STAGES[ds]?.color || "#475569"}15`, padding:"1px 5px", borderRadius:"3px" }}>D:S{ds}</span>
+            {ws != null && <span style={{ color: STAGES[ws]?.color || "#475569", background:`${STAGES[ws]?.color || "#475569"}15`, padding:"1px 5px", borderRadius:"3px" }}>W:S{ws}</span>}
+            {twoMatch && <span style={{ color: allSame ? "#22c55e" : "#fbbf24", marginLeft:"2px" }}>{allSame ? "★★★" : "★★"}</span>}
+          </div>
+        );
+      })()}
+
+      {rv != null && (
+        <div style={{ fontSize:"10px", marginTop:"3px",
+          color: rv > 2 ? "#ef4444" : rv > 1.5 ? "#fbbf24" : rv > 0.7 ? "#64748b" : "#334155",
+        }}>
+          RVOL {rv}x
+          {relStrength != null && effStage !== 2 && (
+            <span style={{ marginLeft:"6px", fontSize:"9px", color: relStrength > 1.5 ? "#22c55e" : relStrength > 1.0 ? "#94a3b8" : relStrength < 0.5 ? "#ef4444" : "#64748b" }}>
+              RS {relStrength}x
+            </span>
+          )}
+          {dir && dir !== "neutral" && (
+            <span style={{ marginLeft:"6px", color: (dir==="down"||dir==="toDown")?"#f87171":"#4ade80" }}>
+              {(dir==="down"||dir==="toDown") ? "▼" : "▲"}
+            </span>
+          )}
+        </div>
+      )}
+
+      {showNearBreak && d?.consolBounds && (() => {
+        const allBounds = [...(d.consolBounds.daily || []), ...(d.consolBounds.hourly || []), ...(d.consolBounds.weekly || [])];
+        const near = allBounds.filter(b => b.priceInRange && (b.nearBreakout || b.nearBreakdown));
+        if (near.length === 0) return null;
+        return (
+          <div style={{ marginTop:"4px", fontSize:"9px" }}>
+            {near.slice(0, 3).map(b => (
+              <div key={b.label} style={{ color: b.nearBreakout ? "#22c55e" : "#ef4444", fontWeight:"700" }}>
+                {b.nearBreakout ? `↑ ${b.distToHigh}% to $${b.rangeHigh}` : `↓ ${b.distToLow}% to $${b.rangeLow}`}
+                <span style={{ color:"#475569", fontWeight:"400" }}> ({b.label})</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+// ================================================================
+// DETAIL MODAL
+// ================================================================
+function DetailModal({ sym, d, effStage, isManual, setOverrides, onRecordFeedback, feedbackHint, onClose, refreshAllTickers, overrides: ovObj, relStrength }) {
+  const s  = STAGES[effStage] || STAGES[1];
+  const an = d?.analysis;
+  const up = d?.pct >= 0;
+  const [pendingStage, setPendingStage] = useState(null);
+  const [overrideTf, setOverrideTf]     = useState("daily");
+  const [reason, setReason]             = useState("");
+  const [showFeedbackLog, setShowFeedbackLog] = useState(false);
+
+  const applyOverride = () => {
+    if (pendingStage == null || !reason.trim()) return;
+    const tfAnalysis = overrideTf === "hourly" ? d?.hourlyAnalysis : overrideTf === "weekly" ? d?.weeklyAnalysis : an;
+    onRecordFeedback(sym, tfAnalysis?.stage || effStage, pendingStage, reason.trim(), captureSnapshot(tfAnalysis || an, d?.price), overrideTf);
+    setOverrides(p => {
+      const existing = p[sym];
+      const prev = (existing != null && typeof existing === "object") ? existing : {};
+      return { ...p, [sym]: { ...prev, [overrideTf]: pendingStage } };
+    });
+    setPendingStage(null);
+    setReason("");
+    // Refresh all tickers with new feedback context
+    if (refreshAllTickers) refreshAllTickers();
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,0.78)",
+      zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px",
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:"#0c1120", border:`1px solid ${s.border}`,
+        borderRadius:"14px", width:"100%", maxWidth:"520px",
+        maxHeight:"90vh", overflowY:"auto",
+        boxShadow:`0 0 50px ${s.glow}`, padding:"26px",
+      }}>
+        {/* Header */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div>
+            <span style={{ fontSize:"26px", fontWeight:"900", letterSpacing:"0.05em" }}>{sym}</span>
+            {d?.price != null && <>
+              <span style={{ marginLeft:"12px", fontSize:"20px", fontWeight:"600" }}>${fmtP(d.price)}</span>
+              <span style={{ marginLeft:"8px", fontSize:"14px", fontWeight:"700", color:up?"#4ade80":"#f87171" }}>
+                {up?"▲":"▼"}{Math.abs(d.pct).toFixed(2)}%
+              </span>
+            </>}
+          </div>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:"24px" }}>✕</button>
+        </div>
+
+        {/* Stage panel */}
+        <div style={{ marginTop:"16px", padding:"16px", background:`${s.color}10`, border:`1px solid ${s.border}55`, borderRadius:"10px" }}>
+          <div style={{ color:s.color, fontWeight:"800", fontSize:"15px" }}>
+            {s.icon} Stage {effStage}: {s.name}
+            {isManual && <span style={{ fontSize:"11px", color:"#94a3b8", fontWeight:"400", marginLeft:"8px" }}>(manual)</span>}
+          </div>
+          <div style={{ color:"#94a3b8", marginTop:"6px", fontSize:"12px", lineHeight:1.6 }}>{s.desc}</div>
+          <div style={{ marginTop:"8px", fontSize:"12px" }}>
+            <span style={{ color:"#64748b" }}>Strategy: </span>
+            <span style={{ color:"#e2e8f0", fontWeight:"700" }}>{s.strategy}</span>
+          </div>
+        </div>
+
+        {/* TradingView Chart */}
+        <div style={{ marginTop:"14px", borderRadius:"10px", overflow:"hidden", border:"1px solid #1e293b" }}>
+          <iframe
+            src={`https://s.tradingview.com/widgetembed/?frameElementId=tv_${sym}&symbol=${encodeURIComponent(sym)}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=0&toolbarbg=0c1120&studies=RSI%40tv-basicstudies&theme=dark&style=1&timezone=America%2FNew_York&withdateranges=1&showpopupbutton=1&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&showpopupbutton=1&locale=en&utm_source=&utm_medium=widget&utm_campaign=chart`}
+            style={{ width:"100%", height:"380px", border:"none", display:"block" }}
+            allowTransparency="true"
+            allowFullScreen
+          />
+        </div>
+
+        {/* Multi-Timeframe Analysis */}
+        <div style={{ marginTop:"14px" }}>
+          <div style={{ fontSize:"11px", fontWeight:"700", color:"#94a3b8", marginBottom:"8px" }}>Multi-Timeframe Stages</div>
+          {[
+            { label: "Hourly",  a: d?.hourlyAnalysis, tfKey: "hourly" },
+            { label: "Daily",   a: an, tfKey: "daily" },
+            { label: "Weekly",  a: d?.weeklyAnalysis, tfKey: "weekly" },
+          ].map(tf => {
+            const ov = ovObj?.[sym];
+            const tfOverride = ov && typeof ov === "object" ? ov[tf.tfKey] : (typeof ov === "number" && tf.tfKey === "daily" ? ov : null);
+            const a = tf.a;
+            const displayStage = tfOverride != null ? tfOverride : a?.stage;
+            const stg = displayStage != null ? (STAGES[displayStage] || STAGES[0]) : (a ? (STAGES[a.stage] || STAGES[0]) : null);
+            return (
+              <div key={tf.label} style={{
+                display:"flex", alignItems:"center", gap:"10px",
+                padding:"8px 12px", marginBottom:"4px", borderRadius:"8px",
+                background: stg ? `${stg.color}08` : "#0d1324",
+                border: `1px solid ${stg ? stg.border + "33" : "#1e293b"}`,
+              }}>
+                <span style={{ fontSize:"11px", color:"#64748b", fontWeight:"700", width:"50px", flexShrink:0 }}>{tf.label}</span>
+                {a ? (<>
+                  <span style={{
+                    padding:"2px 8px", borderRadius:"4px", fontSize:"11px", fontWeight:"800",
+                    background:`${stg.color}18`, border:`1px solid ${stg.border}`, color:stg.color, flexShrink:0,
+                  }}>{stg.icon} S{displayStage != null ? displayStage : a.stage}{tfOverride != null && " ✎"}</span>
+                  <span style={{ fontSize:"11px", color:"#94a3b8", flex:1 }}>
+                    {a.direction === "up" ? "▲" : a.direction === "down" ? "▼" : "—"} {stg.name}
+                    {a.emaStack ? ` · ${a.emaStack}` : ""}
+                    {a.consolTimeframe ? ` · ${a.consolTimeframe}` : ""}
+                    {a.chainConfirmed === true ? " ✓" : ""}
+                  </span>
+                  <span style={{ fontSize:"10px", color:"#475569", flexShrink:0 }}>
+                    RVOL {a.rvol}x
+                  </span>
+                  {a.classifiedAt && (
+                    <span style={{ fontSize:"9px", color:"#334155", flexShrink:0 }}>
+                      {fmtTime(a.classifiedAt)}{a.classifiedPrice != null ? ` @$${fmtP(a.classifiedPrice)}` : ""}
+                    </span>
+                  )}
+                </>) : (
+                  <span style={{ fontSize:"11px", color:"#334155" }}>Insufficient data</span>
+                )}
+              </div>
+            );
+          })}
+          {an && d?.hourlyAnalysis && d?.weeklyAnalysis && (() => {
+            const stages = [d.hourlyAnalysis.stage, an.stage, d.weeklyAnalysis.stage];
+            const allSame = stages[0] === stages[1] && stages[1] === stages[2];
+            const twoMatch = stages[0] === stages[1] || stages[1] === stages[2] || stages[0] === stages[2];
+            if (!twoMatch) return null;
+            const matchStage = allSame ? stages[0] : (stages[0]===stages[1] ? stages[0] : (stages[1]===stages[2] ? stages[1] : stages[0]));
+            const mstg = STAGES[matchStage];
+            return (
+              <div style={{
+                marginTop:"4px", padding:"8px 12px", borderRadius:"8px",
+                background: allSame ? `${mstg.color}12` : "#111827",
+                border: `1px solid ${allSame ? mstg.border : "#334155"}`,
+              }}>
+                <span style={{ color: allSame ? "#22c55e" : "#fbbf24", fontWeight:"800", fontSize:"11px" }}>
+                  {allSame ? "★★★ Triple Confluence" : "★★ Dual Confluence"}
+                </span>
+                <span style={{ color:"#94a3b8", marginLeft:"8px", fontSize:"11px" }}>
+                  {allSame
+                    ? `All timeframes show S${matchStage}: ${mstg.name} — strongest signal`
+                    : `Two timeframes agree on S${matchStage}: ${mstg.name}`}
+                </span>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Stats */}
+        {an && (
+          <div style={{ marginTop:"14px", display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"8px" }}>
+            {[
+              ["RVOL", `${an.rvol}x`, an.rvol>2?"#ef4444":an.rvol>1.5?"#fbbf24":"#94a3b8"],
+              relStrength != null ? ["RS vs SPY", `${relStrength}x`, relStrength>1.5?"#22c55e":relStrength>1.0?"#94a3b8":"#f87171"] : null,
+              an.touches != null ? ["Touches", `${an.touches}x`, an.touches>=3?"#22c55e":"#94a3b8"] : null,
+              ["EMA 5d", an.ma5 ? `$${fmtP(an.ma5)}` : "—", "#94a3b8"],
+              ["EMA 10d", an.ma10 ? `$${fmtP(an.ma10)}` : "—", "#94a3b8"],
+              ["EMA 20d", an.ma20 ? `$${fmtP(an.ma20)}` : "—", "#94a3b8"],
+              ["EMA 8d", an.ma8 ? `$${fmtP(an.ma8)}` : "—", "#64748b"],
+              ["EMA 21d", an.ma21 ? `$${fmtP(an.ma21)}` : "—", "#64748b"],
+              ["EMA 50d", an.ma50 ? `$${fmtP(an.ma50)}` : "—", "#64748b"],
+              ["Volume", fmtVol(d?.volume), "#94a3b8"],
+              ["Avg Vol", fmtVol(d?.avgVol), "#94a3b8"],
+              d?.preMarket ? ["Pre-Mkt", `$${fmtP(d.preMarket.price)}${d.preMarket.pct != null ? ` (${d.preMarket.pct >= 0 ? "+" : ""}${d.preMarket.pct}%)` : ""}`, d.preMarket.pct >= 0 ? "#4ade80" : "#f87171"] : null,
+              d?.postMarket ? ["Post-Mkt", `$${fmtP(d.postMarket.price)}${d.postMarket.pct != null ? ` (${d.postMarket.pct >= 0 ? "+" : ""}${d.postMarket.pct}%)` : ""}`, d.postMarket.pct >= 0 ? "#4ade80" : "#f87171"] : null,
+            ].filter(Boolean).map(([k,v,c]) => (
+              <div key={k} style={{ background:"#111827", borderRadius:"8px", padding:"10px 12px" }}>
+                <div style={{ color:"#475569", fontSize:"10px", textTransform:"uppercase", letterSpacing:"0.06em" }}>{k}</div>
+                <div style={{ color:c, fontWeight:"700", marginTop:"4px", fontSize:"13px" }}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Consolidation boundaries — ALL timeframes */}
+        {d?.consolBounds && (d.consolBounds.daily.length > 0 || d.consolBounds.hourly.length > 0 || d.consolBounds.weekly.length > 0) && (
+          <div style={{ marginTop:"12px", padding:"10px 12px", background:"#0e1a30", border:"1px solid #1e293b", borderRadius:"8px" }}>
+            <div style={{ fontSize:"11px", fontWeight:"700", color:"#94a3b8", marginBottom:"8px" }}>Consolidation Boundaries</div>
+            {[
+              { tfLabel: "Hourly", bounds: d.consolBounds.hourly },
+              { tfLabel: "Daily", bounds: d.consolBounds.daily },
+              { tfLabel: "Weekly", bounds: d.consolBounds.weekly },
+            ].filter(t => t.bounds.length > 0).map(tf => (
+              <div key={tf.tfLabel} style={{ marginBottom:"8px" }}>
+                <div style={{ fontSize:"10px", fontWeight:"700", color:"#64748b", marginBottom:"4px" }}>{tf.tfLabel}</div>
+                {tf.bounds.map(b => (
+                  <div key={b.label} style={{
+                    display:"flex", alignItems:"center", gap:"8px", padding:"5px 8px", marginBottom:"3px",
+                    borderRadius:"6px", background:"#111827", border:`1px solid ${b.priceInRange ? "#1e293b" : "#ef444433"}`,
+                  }}>
+                    <span style={{ fontSize:"10px", color:"#94a3b8", fontWeight:"700", width:"60px", flexShrink:0 }}>{b.label}</span>
+                    <span style={{ fontSize:"11px", color:"#f87171", fontWeight:"700" }}>${b.rangeLow}</span>
+                    <span style={{ fontSize:"9px", color:"#475569" }}>—</span>
+                    <span style={{ fontSize:"11px", color:"#4ade80", fontWeight:"700" }}>${b.rangeHigh}</span>
+                    <span style={{ fontSize:"10px", color:"#475569", flex:1, textAlign:"right" }}>{b.rangePct}%</span>
+                    {b.nearBreakout && <span style={{ fontSize:"9px", color:"#22c55e", fontWeight:"800" }}>↑{b.distToHigh}%</span>}
+                    {b.nearBreakdown && <span style={{ fontSize:"9px", color:"#ef4444", fontWeight:"800" }}>↓{b.distToLow}%</span>}
+                    {!b.priceInRange && <span style={{ fontSize:"9px", color:"#ef4444", fontWeight:"800" }}>OUT</span>}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Legacy consolidation detail for non-S1 stocks that still have consol context */}
+        {an && an.consolTimeframe && !(d?.consolBounds?.daily?.length > 0 || d?.consolBounds?.hourly?.length > 0 || d?.consolBounds?.weekly?.length > 0) && (
+          <div style={{ marginTop:"12px", padding:"10px 12px", background:"#0e1a30", border:"1px solid #1e293b", borderRadius:"8px" }}>
+            <div style={{ fontSize:"11px", fontWeight:"700", color:"#94a3b8", marginBottom:"6px" }}>Consolidation Context</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"6px" }}>
+              {[
+                ["Timeframe", an.consolTimeframe, "#e2e8f0"],
+                ["Range %", `${an.consolRange}%`, "#e2e8f0"],
+                an.consolCrossovers != null ? ["Crossovers", an.consolCrossovers, "#e2e8f0"] : null,
+                an.consolHigh ? ["Range High", `$${fmtP(an.consolHigh)}`, "#4ade80"] : null,
+                an.consolLow ? ["Range Low", `$${fmtP(an.consolLow)}`, "#f87171"] : null,
+                an.emaFlatness != null ? ["EMA8 Δ/day", `${an.emaFlatness}%`, an.emaFlatness < 0.3 ? "#22c55e" : "#f59e0b"] : null,
+              ].filter(Boolean).map(([k,v,c]) => (
+                <div key={k}>
+                  <div style={{ fontSize:"10px", color:"#475569" }}>{k}</div>
+                  <div style={{ fontSize:"12px", fontWeight:"700", color:c }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Auto-detect note */}
+        {an && (
+          <div style={{ marginTop:"12px", padding:"8px 12px", background:"#080e1c", borderRadius:"6px", fontSize:"11px", color:"#475569" }}>
+            Auto: Stage {an.stage} — {STAGES[an.stage]?.name}
+            {an.direction && an.direction!=="neutral" && ` (${an.direction})`}
+            {an.gapPct && ` | Gap ${an.gapPct}%`}
+            {an.pct && ` | Breakout ${an.pct}%`}
+            {an.consolTimeframe && ` | ${an.consolTimeframe}`}
+            {an.intradayDetected != null && (an.intradayDetected ? " | ⚡ 30m" : " | EOD")}
+            {an.emaStack && ` | EMA ${an.emaStack}`}
+            {an.chainConfirmed != null && (an.chainConfirmed ? " | ✓ Chain" : " | ⚠ No chain")}
+            {an.wasTrending != null && (an.wasTrending ? " | Was trending" : "")}
+            {an.wasExhausting && " | Post-exhaustion snapback"}
+            {an.massiveMove && ` | ⚠ ${an.massiveMove}% in 2wk (extreme)`}
+            {an.hourlyExhaust && ` | Hourly exhaust: RSI ${an.rsi ?? "—"}${an.rsiExtreme ? " (extreme)" : ""}${an.rsiDivergence ? " (divergence)" : ""} | Vol ${an.recentVolRatio ?? "—"}x${an.volClimax ? " (climax)" : ""} | ${an.accelerating ? "Accelerating" : "Steady"} | ${an.signalCount}/3 signals`}
+            {an.capitulation && ` | 💥 Capitulation: Vol ${an.volSpike}x avg${an.wideBar ? " + wide bar" : ""}${an.rsiCapit ? ` + RSI ${an.rsi}` : ""}`}
+            {an.consolQuality != null && ` | Quality ${"★".repeat(an.consolQuality)}${"☆".repeat(3 - an.consolQuality)}${an.rsiNeutral ? " RSI✓" : ""}${an.volContracting ? " Vol↓" : ""}${an.emasTight ? " EMA✓" : ""}`}
+            {an.conviction != null && ` | Conviction ${an.conviction >= 3 ? "HIGH" : an.conviction >= 2 ? "MED" : "LOW"} (${an.conviction}/4)${an.rsiConfirm ? " RSI✓" : ""}`}
+            {an.touches != null && an.touches > 0 && ` | ${an.touches}x boundary tests`}
+            {relStrength != null && ` | RS vs SPY: ${relStrength}x`}
+            {an.learnedOverride && ` | 🧠 Learned: "${an.learnedReason}"`}
+          </div>
+        )}
+
+        {/* Learning hint */}
+        {feedbackHint && !isManual && feedbackHint.stage !== effStage && (
+          <div style={{ marginTop:"12px", padding:"10px 14px", background:"#0c1a10", border:"1px solid #22c55e44", borderRadius:"8px", fontSize:"11px" }}>
+            <span style={{ color:"#22c55e", fontWeight:"800" }}>🧠 Learned suggestion: </span>
+            <span style={{ color:"#94a3b8" }}>
+              Based on similar pattern ({(feedbackHint.confidence * 100).toFixed(0)}% confidence, {feedbackHint.agreeing} match{feedbackHint.agreeing !== 1 ? "es" : ""}),
+              this may be <span style={{ color: STAGES[feedbackHint.stage]?.color, fontWeight:"700" }}>S{feedbackHint.stage}: {STAGES[feedbackHint.stage]?.name}</span>
+            </span>
+            <div style={{ color:"#475569", marginTop:"4px", fontStyle:"italic" }}>Previous reason: "{feedbackHint.reason}"</div>
+          </div>
+        )}
+
+        {/* Manual override with required reason */}
+        <div style={{ marginTop:"20px" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:"12px", marginBottom:"10px" }}>
+            <span style={{ color:"#94a3b8", fontSize:"12px", fontWeight:"700" }}>✎ Override Stage for:</span>
+            <div style={{ display:"flex", gap:"4px" }}>
+              {["hourly","daily","weekly"].map(tf => (
+                <button key={tf} onClick={() => setOverrideTf(tf)} style={{
+                  padding:"4px 10px", borderRadius:"5px", cursor:"pointer", fontSize:"10px", fontWeight:"800",
+                  border: overrideTf === tf ? "1px solid #3b82f6" : "1px solid #1e293b",
+                  background: overrideTf === tf ? "#1e408030" : "transparent",
+                  color: overrideTf === tf ? "#93c5fd" : "#475569", textTransform:"capitalize",
+                }}>{tf}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:"7px", flexWrap:"wrap" }}>
+            {Object.entries(STAGES).map(([k,stg]) => {
+              const stgNum = parseInt(k);
+              const isSelected = pendingStage === stgNum;
+              return (
+                <button key={k} className="stage-btn" onClick={() => setPendingStage(isSelected ? null : stgNum)} style={{
+                  padding:"7px 13px", borderRadius:"7px", cursor:"pointer", fontSize:"12px", fontWeight:"800",
+                  border: `1px solid ${isSelected ? stg.color : stg.border}`,
+                  background: isSelected ? `${stg.color}30` : effStage===stgNum ? `${stg.color}15` : "transparent",
+                  color: stg.color, boxShadow: isSelected ? `0 0 12px ${stg.glow}` : undefined,
+                }}>
+                  {stg.icon} S{k}
+                </button>
+              );
+            })}
+            {isManual && (
+              <button onClick={()=>{setOverrides(p=>{const n={...p}; if(typeof n[sym]==="object"){delete n[sym][overrideTf]; if(Object.keys(n[sym]).length===0) delete n[sym];} else {delete n[sym];} return n;});onClose();}} style={{
+                padding:"7px 13px", borderRadius:"7px", cursor:"pointer", fontSize:"12px", fontWeight:"700",
+                border:"1px solid #ef4444", color:"#ef4444", background:"transparent",
+              }}>✕ Auto</button>
+            )}
+          </div>
+
+          {pendingStage != null && pendingStage !== effStage && (
+            <div style={{ marginTop:"12px" }}>
+              <div style={{ color:"#fbbf24", fontSize:"11px", fontWeight:"700", marginBottom:"6px" }}>
+                Why should {sym} ({overrideTf}) be S{pendingStage} ({STAGES[pendingStage]?.name}) instead of S{(overrideTf==="hourly"?d?.hourlyAnalysis?.stage:overrideTf==="weekly"?d?.weeklyAnalysis?.stage:an?.stage) ?? effStage}?
+              </div>
+              <textarea value={reason} onChange={e => setReason(e.target.value)}
+                placeholder="e.g. Price clearly trending above all MAs but algo says consolidation because range was tight..."
+                rows={3} style={{
+                  width:"100%", background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"10px 12px",
+                  color:"#e2e8f0", fontSize:"12px", outline:"none", resize:"vertical", fontFamily:"inherit", lineHeight:1.5,
+                }}
+              />
+              <div style={{ display:"flex", gap:"8px", marginTop:"8px", alignItems:"center" }}>
+                <button onClick={applyOverride} disabled={!reason.trim()} style={{
+                  background: reason.trim() ? "#1e4080" : "#111827", border: `1px solid ${reason.trim() ? "#3b82f6" : "#334155"}`,
+                  color: reason.trim() ? "#93c5fd" : "#475569", borderRadius:"7px", padding:"8px 18px",
+                  cursor: reason.trim() ? "pointer" : "not-allowed", fontSize:"12px", fontWeight:"800",
+                }}>Apply + Save Feedback</button>
+                <button onClick={() => { setPendingStage(null); setReason(""); }} style={{
+                  background:"transparent", border:"1px solid #334155", color:"#64748b",
+                  borderRadius:"7px", padding:"8px 14px", cursor:"pointer", fontSize:"12px",
+                }}>Cancel</button>
+                {!reason.trim() && <span style={{ color:"#f87171", fontSize:"10px" }}>Reason required</span>}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop:"14px" }}>
+            <button onClick={() => setShowFeedbackLog(p => !p)} style={{
+              background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:"10px", padding:0, textDecoration:"underline",
+            }}>{showFeedbackLog ? "Hide" : "Show"} learning history for {sym}</button>
+            {showFeedbackLog && (() => {
+              const fb = loadFeedback().filter(e => e.sym === sym).reverse();
+              return fb.length === 0 ? (
+                <div style={{ color:"#334155", fontSize:"10px", marginTop:"6px" }}>No overrides recorded.</div>
+              ) : (
+                <div style={{ marginTop:"6px", maxHeight:"140px", overflowY:"auto" }}>
+                  {fb.map((e, i) => (
+                    <div key={i} style={{ padding:"6px 10px", background:"#080e1c", borderRadius:"6px", marginBottom:"4px", border:"1px solid #1e293b", fontSize:"10px" }}>
+                      <div style={{ color:"#94a3b8" }}>
+                        <span style={{ fontWeight:"700" }}>S{e.fromStage} → S{e.toStage}</span>
+                        <span style={{ marginLeft:"8px", color:"#475569" }}>{e.date}</span>
+                      </div>
+                      <div style={{ color:"#64748b", marginTop:"2px", fontStyle:"italic" }}>"{e.reason}"</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// IN-PLAY EDITOR
+// ================================================================
+function InPlayEditor({ inPlay, setInPlay, onFetch, onClose }) {
+  const [input, setInput] = useState("");
+  const add = () => {
+    const t = input.trim().toUpperCase();
+    if (t && !inPlay.includes(t)) { setInPlay(p=>[...p,t]); onFetch([t]); }
+    setInput("");
+  };
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.78)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:"#0c1120", border:"1px solid #1e293b", borderRadius:"14px", width:"100%", maxWidth:"440px", padding:"26px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"18px" }}>
+          <span style={{ fontSize:"17px", fontWeight:"800" }}>🎯 In Play Stocks</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:"22px" }}>✕</button>
+        </div>
+        <div style={{ display:"flex", gap:"8px", marginBottom:"18px" }}>
+          <input value={input} onChange={e=>setInput(e.target.value.toUpperCase())} onKeyDown={e=>e.key==="Enter"&&add()}
+            placeholder="Ticker symbol…" style={{ flex:1, background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"10px 14px", color:"#e2e8f0", fontSize:"14px", outline:"none", letterSpacing:"0.06em" }} />
+          <button onClick={add} style={{ background:"#1e4080", border:"1px solid #3b82f6", color:"#93c5fd", borderRadius:"8px", padding:"10px 18px", cursor:"pointer", fontWeight:"800", fontSize:"14px" }}>Add</button>
+        </div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:"8px" }}>
+          {inPlay.map(sym=>(
+            <div key={sym} style={{ display:"flex", alignItems:"center", gap:"6px", background:"#111827", border:"1px solid #1e293b", borderRadius:"7px", padding:"6px 12px", fontSize:"13px", fontWeight:"800" }}>
+              <span>{sym}</span>
+              <button onClick={()=>setInPlay(p=>p.filter(x=>x!==sym))} style={{ background:"none", border:"none", color:"#ef4444", cursor:"pointer", fontSize:"16px", lineHeight:1, padding:0 }}>×</button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// ALERTS PANEL
+// ================================================================
+function AlertsPanel({ alerts, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.78)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:"#0c1120", border:"1px solid #1e293b", borderRadius:"14px", width:"100%", maxWidth:"480px", maxHeight:"80vh", overflowY:"auto", padding:"26px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"18px" }}>
+          <span style={{ fontSize:"17px", fontWeight:"800" }}>⚡ Stage Change History</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:"22px" }}>✕</button>
+        </div>
+        {alerts.length === 0 ? (
+          <div style={{ color:"#475569", textAlign:"center", padding:"40px 0" }}>No stage changes detected yet.</div>
+        ) : alerts.map(a => (
+          <div key={a.id} style={{ display:"flex", alignItems:"center", gap:"12px", padding:"10px 12px", borderRadius:"8px", marginBottom:"6px", background:"#080e1c", border:`1px solid ${STAGES[a.to]?.border}33` }}>
+            <span style={{ padding:"3px 10px", borderRadius:"20px", fontSize:"11px", fontWeight:"800", flexShrink:0, background:`${STAGES[a.to]?.color}20`, border:`1px solid ${STAGES[a.to]?.border}`, color:STAGES[a.to]?.color }}>{a.sym}</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:"12px", fontWeight:"600" }}>S{a.from} {STAGES[a.from]?.icon} → S{a.to} {STAGES[a.to]?.icon} {STAGES[a.to]?.name}</div>
+              <div style={{ fontSize:"10px", color:"#475569", marginTop:"2px" }}>{a.ts.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})} · {a.ts.toLocaleDateString()}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// RESEARCH PAGE — LLM-powered stock research with saved prompts
+// ================================================================
+const PROMPTS_KEY = "research_prompts_v1";
+const API_KEY_KEY = "research_apikey_v1";
+const API_PROVIDER_KEY = "research_provider_v1";
+const RESEARCH_HISTORY_KEY = "research_history_v1";
+
+const DEFAULT_PROMPTS = [
+  {
+    id: "exec-summary",
+    name: "Executive Summary",
+    icon: "📊",
+    desc: "Full business analysis: revenue model, moat, valuation, risks, catalysts",
+    prompt: `You are a senior equity research analyst. The user will provide a stock ticker. Produce a comprehensive research report on this company following the structure below. Use your full knowledge base. Be specific with numbers, metrics, and evidence where possible.
+
+Executive Summary (about 150–200 words)
+Summarize in plain English how this company makes money, its economic quality, and where its edge and risks lie.
+End with one sentence that describes the business to an investor in one line.
+
+1. What They Sell and Who Buys
+* Describe the main products or services.
+* Define target customers by type, segment, and geography, and why they buy, including the main pain point or motivation.
+
+2. How They Make Money
+* Explain the revenue model and pricing logic.
+* Clarify whether revenues are one-time, recurring, transaction-based, or hybrid.
+* Include key revenue segments and their share if available.
+
+3. Revenue Quality
+* Assess how predictable and diversified revenues are.
+* Break down recurring versus one-off components, customer or segment concentration, and exposure to economic cycles.
+
+4. Cost Structure
+* Outline major cost drivers, such as COGS, labor, logistics, marketing.
+* Include gross and operating margins where possible.
+* Comment on scalability, fixed versus variable costs, and how margins move with growth.
+
+5. Capital Intensity
+* Describe the assets needed to run and grow operations.
+* Include capital expenditure levels, working capital needs, and cash conversion efficiency.
+
+6. Growth Drivers
+* Identify the main levers for revenue growth, such as volume, pricing, product mix, geographic expansion, or acquisitions.
+* Clarify whether each driver is structural and long term or cyclical and short term.
+
+7. Competitive Edge
+* Explain what protects the company's economics from competition, such as brand, cost advantage, switching costs, regulation, network effects, data, or intellectual property.
+* Discuss how durable and testable this moat appears, using financial evidence such as margins, ROIC, or customer retention.
+
+8. Industry Structure and Position
+* Describe the industry value chain and where profit pools sit.
+* Explain market structure, for example fragmented or consolidated, presence of pricing power, and key regulatory factors.
+* Place the company within this context, including market share, relative scale, and whether it acts as a price setter, a price taker, a niche specialist, or a platform.
+
+9. Unit Economics and Key KPIs
+* Present unit economics at the relevant level, such as per customer, store, device, transaction, or cohort.
+* Include metrics such as CAC, LTV, churn or retention, ARPU, utilization, occupancy, and payback periods where applicable.
+* Comment on whether these unit economics and KPIs are improving, stable, or weakening over time.
+
+10. Capital Allocation and Balance Sheet
+* Summarize historical capital allocation across organic investment, acquisitions, buybacks, dividends, and debt reduction.
+* Describe balance sheet strength, including leverage, debt maturity profile, liquidity, and any major off balance sheet obligations.
+* Assess whether capital allocation has likely created or destroyed value.
+
+11. Risks and Failure Modes
+* Identify key risks, such as competitive, technological, regulatory, macroeconomic, customer concentration, or currency exposure.
+* Describe in simple terms how the equity story could fail, and what would need to happen for this to occur.
+* Highlight areas where uncertainty is especially high or information is limited.
+
+12. Valuation and Expected Return Profile
+* Compare current valuation with the company's own history and with peers, using the metrics that best fit this business, such as P/E, EV/EBIT, EV/Sales, FCF yield.
+* Provide a simple scenario framework with bear, base, and bull cases, including rough assumptions and implied upside or downside.
+* State explicitly what must be true for the current price to be attractive, fair, or expensive.
+
+13. Catalysts and Time Horizon
+* List near and medium term catalysts, such as product launches, margin inflection, regulatory events, refinancing, or index changes.
+* Note any slow building catalysts, such as mix shift or operating leverage that accumulates over time.
+* Explain the expected time horizon for the thesis to play out and how the market is likely to recognize the value if the thesis is correct.
+
+Tone: Analytical, neutral, precise.
+Goal: Produce a concise yet rich narrative that lets an investor understand how this business works, how resilient and valuable its economics are, and whether the stock looks attractive at today's price.`
+  },
+];
+
+function loadPrompts() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PROMPTS_KEY) || "null");
+    if (saved && saved.length > 0) return saved;
+  } catch {}
+  return DEFAULT_PROMPTS;
+}
+function savePrompts(prompts) {
+  try { localStorage.setItem(PROMPTS_KEY, JSON.stringify(prompts)); } catch {}
+}
+function loadResearchHistory() {
+  try { return JSON.parse(localStorage.getItem(RESEARCH_HISTORY_KEY) || "[]"); } catch { return []; }
+}
+function saveResearchHistory(h) {
+  try { localStorage.setItem(RESEARCH_HISTORY_KEY, JSON.stringify(h.slice(-50))); } catch {}
+}
+
+// Simple markdown-to-HTML converter
+function mdToHtml(md) {
+  if (!md) return "";
+  let html = md
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/^### (.+)$/gm, "<h3>$1</h3>")
+    .replace(/^## (.+)$/gm, "<h2>$1</h2>")
+    .replace(/^# (.+)$/gm, "<h1>$1</h1>")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.+?)\*/g, "<em>$1</em>")
+    .replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>")
+    .replace(/^\* (.+)$/gm, "<li>$1</li>")
+    .replace(/^- (.+)$/gm, "<li>$1</li>")
+    .replace(/^(\d+)\. (.+)$/gm, "<li>$2</li>")
+    .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+    .replace(/\n{2,}/g, "</p><p>")
+    .replace(/\n/g, "<br/>");
+  if (!html.startsWith("<")) html = "<p>" + html;
+  if (!html.endsWith(">")) html += "</p>";
+  return html;
+}
+
+async function callLLM(apiKey, provider, systemPrompt, userMessage) {
+  if (provider === "openai") {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        max_tokens: 8000,
+        temperature: 0.4,
+      }),
+    });
+    if (!res.ok) { const e = await res.text(); throw new Error(`OpenAI ${res.status}: ${e.slice(0, 200)}`); }
+    const js = await res.json();
+    return js.choices?.[0]?.message?.content || "No response.";
+  } else {
+    // Anthropic Claude
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 8000,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMessage }],
+      }),
+    });
+    if (!res.ok) { const e = await res.text(); throw new Error(`Anthropic ${res.status}: ${e.slice(0, 200)}`); }
+    const js = await res.json();
+    return js.content?.[0]?.text || "No response.";
+  }
+}
+
+function AddPromptModal({ onSave, onClose, editPrompt }) {
+  const [name, setName] = useState(editPrompt?.name || "");
+  const [icon, setIcon] = useState(editPrompt?.icon || "📝");
+  const [desc, setDesc] = useState(editPrompt?.desc || "");
+  const [prompt, setPrompt] = useState(editPrompt?.prompt || "");
+
+  const save = () => {
+    if (!name.trim() || !prompt.trim()) return;
+    onSave({
+      id: editPrompt?.id || `custom-${Date.now()}`,
+      name: name.trim(),
+      icon: icon || "📝",
+      desc: desc.trim(),
+      prompt: prompt.trim(),
+    });
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.78)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background:"#0c1120", border:"1px solid #1e293b", borderRadius:"14px", width:"100%", maxWidth:"600px", maxHeight:"90vh", overflowY:"auto", padding:"26px" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"18px" }}>
+          <span style={{ fontSize:"17px", fontWeight:"800" }}>{editPrompt ? "Edit Prompt" : "New Research Prompt"}</span>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:"22px" }}>✕</button>
+        </div>
+
+        <div style={{ display:"flex", gap:"10px", marginBottom:"14px" }}>
+          <div style={{ flex:"0 0 60px" }}>
+            <div style={{ fontSize:"10px", color:"#475569", marginBottom:"4px", fontWeight:"700" }}>ICON</div>
+            <input value={icon} onChange={e => setIcon(e.target.value)} maxLength={2}
+              style={{ width:"100%", background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"10px", color:"#e2e8f0", fontSize:"20px", outline:"none", textAlign:"center" }} />
+          </div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:"10px", color:"#475569", marginBottom:"4px", fontWeight:"700" }}>NAME</div>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Earnings Analysis"
+              style={{ width:"100%", background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"10px 14px", color:"#e2e8f0", fontSize:"14px", outline:"none" }} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom:"14px" }}>
+          <div style={{ fontSize:"10px", color:"#475569", marginBottom:"4px", fontWeight:"700" }}>SHORT DESCRIPTION</div>
+          <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Brief description shown on the prompt card"
+            style={{ width:"100%", background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"10px 14px", color:"#e2e8f0", fontSize:"13px", outline:"none" }} />
+        </div>
+
+        <div style={{ marginBottom:"18px" }}>
+          <div style={{ fontSize:"10px", color:"#475569", marginBottom:"4px", fontWeight:"700" }}>PROMPT TEMPLATE</div>
+          <div style={{ fontSize:"10px", color:"#334155", marginBottom:"6px" }}>The ticker symbol will be appended automatically. Write the instructions the LLM should follow.</div>
+          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={12}
+            placeholder="You are a senior equity research analyst. The user will provide a stock ticker..."
+            style={{ width:"100%", background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"12px 14px", color:"#e2e8f0", fontSize:"12px", outline:"none", resize:"vertical", fontFamily:"inherit", lineHeight:1.6 }} />
+        </div>
+
+        <div style={{ display:"flex", gap:"10px" }}>
+          <button onClick={save} disabled={!name.trim() || !prompt.trim()} style={{
+            flex:1, padding:"10px 20px", borderRadius:"8px", cursor: (name.trim() && prompt.trim()) ? "pointer" : "not-allowed",
+            fontSize:"13px", fontWeight:"800",
+            background: (name.trim() && prompt.trim()) ? "#1e4080" : "#111827",
+            border: `1px solid ${(name.trim() && prompt.trim()) ? "#3b82f6" : "#334155"}`,
+            color: (name.trim() && prompt.trim()) ? "#93c5fd" : "#475569",
+          }}>{editPrompt ? "Save Changes" : "Add Prompt"}</button>
+          <button onClick={onClose} style={{ padding:"10px 20px", borderRadius:"8px", cursor:"pointer", fontSize:"13px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResearchPage() {
+  const [ticker, setTicker] = useState("");
+  const [prompts, setPrompts] = useState(loadPrompts);
+  const [selectedPrompt, setSelectedPrompt] = useState(null);
+  const [apiKey, setApiKey] = useState(() => { try { return localStorage.getItem(API_KEY_KEY) || ""; } catch { return ""; } });
+  const [provider, setProvider] = useState(() => { try { return localStorage.getItem(API_PROVIDER_KEY) || "anthropic"; } catch { return "anthropic"; } });
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAddPrompt, setShowAddPrompt] = useState(false);
+  const [editingPrompt, setEditingPrompt] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [streamText, setStreamText] = useState("");
+  const [history, setHistory] = useState(loadResearchHistory);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const saveKey = (k) => { setApiKey(k); try { localStorage.setItem(API_KEY_KEY, k); } catch {} };
+  const saveProv = (p) => { setProvider(p); try { localStorage.setItem(API_PROVIDER_KEY, p); } catch {} };
+
+  const handleSavePrompt = (prompt) => {
+    setPrompts(prev => {
+      const idx = prev.findIndex(p => p.id === prompt.id);
+      const next = idx >= 0 ? prev.map((p, i) => i === idx ? prompt : p) : [...prev, prompt];
+      savePrompts(next);
+      return next;
+    });
+  };
+
+  const handleDeletePrompt = (id) => {
+    setPrompts(prev => {
+      const next = prev.filter(p => p.id !== id);
+      savePrompts(next);
+      return next;
+    });
+  };
+
+  const runResearch = async (promptObj) => {
+    const sym = ticker.trim().toUpperCase();
+    if (!sym) { setError("Enter a ticker symbol first."); return; }
+    if (!apiKey) { setError("Set your API key in Settings first."); setShowSettings(true); return; }
+    setSelectedPrompt(promptObj);
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setStreamText("");
+    try {
+      const userMsg = `Ticker: ${sym}\n\nPlease produce the full analysis for ${sym}.`;
+      const output = await callLLM(apiKey, provider, promptObj.prompt, userMsg);
+      setResult(output);
+      // Save to history
+      const entry = { sym, promptName: promptObj.name, promptId: promptObj.id, ts: Date.now(), output };
+      setHistory(prev => {
+        const next = [entry, ...prev].slice(0, 50);
+        saveResearchHistory(next);
+        return next;
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadHistoryEntry = (entry) => {
+    setTicker(entry.sym);
+    setResult(entry.output);
+    setSelectedPrompt(prompts.find(p => p.id === entry.promptId) || { name: entry.promptName });
+    setShowHistory(false);
+    setError(null);
+  };
+
+  return (
+    <div style={{ padding:"0 0 40px" }}>
+      <div style={{ padding:"20px 24px 0", maxWidth:"1200px", margin:"0 auto" }}>
+        {/* Header row */}
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:"12px", marginBottom:"20px" }}>
+          <div>
+            <h1 style={{ fontSize:"22px", fontWeight:"900", letterSpacing:"0.04em", margin:0, background:"linear-gradient(135deg,#c4b5fd,#818cf8)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
+              Research
+            </h1>
+            <div style={{ color:"#475569", fontSize:"11px", marginTop:"4px" }}>
+              LLM-powered equity research · {prompts.length} prompt{prompts.length !== 1 ? "s" : ""} · {provider === "anthropic" ? "Claude" : "GPT-4o"}
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:"8px" }}>
+            <button onClick={() => setShowHistory(true)} style={{ padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>
+              📜 History {history.length > 0 && `(${history.length})`}
+            </button>
+            <button onClick={() => setShowSettings(p => !p)} style={{ padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"700", border: showSettings ? "1px solid #7c3aed" : "1px solid #334155", background: showSettings ? "#2e106522" : "transparent", color: showSettings ? "#a78bfa" : "#64748b" }}>
+              ⚙ Settings
+            </button>
+          </div>
+        </div>
+
+        {/* Settings panel */}
+        {showSettings && (
+          <div style={{ marginBottom:"18px", padding:"16px", background:"#0d1324", border:"1px solid #1e293b", borderRadius:"10px" }}>
+            <div style={{ fontSize:"11px", fontWeight:"700", color:"#94a3b8", marginBottom:"10px" }}>API Configuration</div>
+            <div style={{ display:"flex", gap:"10px", marginBottom:"10px", alignItems:"center" }}>
+              <span style={{ fontSize:"11px", color:"#64748b", fontWeight:"700", width:"70px", flexShrink:0 }}>Provider:</span>
+              {[["anthropic","Claude (Anthropic)"],["openai","GPT-4o (OpenAI)"]].map(([k,l]) => (
+                <button key={k} onClick={() => saveProv(k)} style={{
+                  padding:"5px 12px", borderRadius:"6px", cursor:"pointer", fontSize:"11px", fontWeight:"700",
+                  border: provider === k ? "1px solid #7c3aed" : "1px solid #1e293b",
+                  background: provider === k ? "#2e106530" : "transparent",
+                  color: provider === k ? "#c4b5fd" : "#475569",
+                }}>{l}</button>
+              ))}
+            </div>
+            <div style={{ display:"flex", gap:"10px", alignItems:"center" }}>
+              <span style={{ fontSize:"11px", color:"#64748b", fontWeight:"700", width:"70px", flexShrink:0 }}>API Key:</span>
+              <input value={apiKey} onChange={e => saveKey(e.target.value)} type="password"
+                placeholder={provider === "anthropic" ? "sk-ant-..." : "sk-..."}
+                style={{ flex:1, background:"#111827", border:"1px solid #334155", borderRadius:"8px", padding:"8px 12px", color:"#e2e8f0", fontSize:"12px", outline:"none", fontFamily:"monospace" }} />
+              {apiKey && <span style={{ fontSize:"10px", color:"#22c55e" }}>✓ Set</span>}
+            </div>
+            <div style={{ fontSize:"10px", color:"#334155", marginTop:"8px" }}>Your key is stored locally in your browser and never sent anywhere except to the API provider.</div>
+          </div>
+        )}
+
+        {/* Ticker input */}
+        <div style={{ display:"flex", gap:"10px", marginBottom:"20px" }}>
+          <input value={ticker} onChange={e => setTicker(e.target.value.toUpperCase())}
+            onKeyDown={e => { if (e.key === "Enter" && selectedPrompt) runResearch(selectedPrompt); }}
+            placeholder="Enter ticker symbol (e.g. AAPL)"
+            style={{ flex:1, maxWidth:"280px", background:"#111827", border:"1px solid #334155", borderRadius:"10px", padding:"12px 18px", color:"#f8fafc", fontSize:"16px", fontWeight:"800", letterSpacing:"0.08em", outline:"none" }} />
+          {ticker && (
+            <div style={{ display:"flex", alignItems:"center", fontSize:"12px", color:"#475569" }}>
+              Select a prompt below to run research on <span style={{ color:"#f8fafc", fontWeight:"800", marginLeft:"4px" }}>{ticker}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Prompt grid */}
+        <div style={{ marginBottom:"16px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:"11px", fontWeight:"700", color:"#64748b" }}>RESEARCH PROMPTS</span>
+          <button onClick={() => { setEditingPrompt(null); setShowAddPrompt(true); }} style={{
+            padding:"5px 14px", borderRadius:"6px", cursor:"pointer", fontSize:"11px", fontWeight:"800",
+            border:"1px solid #334155", background:"transparent", color:"#64748b",
+          }}>+ New Prompt</button>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(240px, 1fr))", gap:"10px", marginBottom:"24px" }}>
+          {prompts.map(p => (
+            <div key={p.id} className="prompt-card"
+              onClick={() => runResearch(p)}
+              style={{
+                background:"#0d1324", border: `1px solid ${selectedPrompt?.id === p.id ? "#7c3aed" : "#1e293b"}`,
+                borderRadius:"10px", padding:"14px", display:"flex", flexDirection:"column", gap:"6px",
+                boxShadow: selectedPrompt?.id === p.id ? "0 0 20px rgba(124,58,237,0.15)" : undefined,
+              }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span style={{ fontSize:"14px" }}>{p.icon}</span>
+                <div style={{ display:"flex", gap:"4px" }}>
+                  <button onClick={e => { e.stopPropagation(); setEditingPrompt(p); setShowAddPrompt(true); }}
+                    style={{ background:"none", border:"none", color:"#334155", cursor:"pointer", fontSize:"12px", padding:"2px" }}>✎</button>
+                  {p.id !== "exec-summary" && (
+                    <button onClick={e => { e.stopPropagation(); if (confirm(`Delete "${p.name}"?`)) handleDeletePrompt(p.id); }}
+                      style={{ background:"none", border:"none", color:"#334155", cursor:"pointer", fontSize:"12px", padding:"2px" }}>×</button>
+                  )}
+                </div>
+              </div>
+              <div style={{ fontSize:"13px", fontWeight:"800", color:"#e2e8f0" }}>{p.name}</div>
+              <div style={{ fontSize:"11px", color:"#475569", lineHeight:1.4 }}>{p.desc}</div>
+              {loading && selectedPrompt?.id === p.id && (
+                <div style={{ fontSize:"10px", color:"#a78bfa", marginTop:"4px" }}><span className="spin">⟳</span> Generating…</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div style={{ padding:"12px 16px", background:"#1a0a0a", border:"1px solid #ef444444", borderRadius:"10px", marginBottom:"16px", fontSize:"12px", color:"#f87171" }}>
+            ⚠ {error}
+          </div>
+        )}
+
+        {/* Loading indicator */}
+        {loading && (
+          <div style={{ padding:"40px", textAlign:"center" }}>
+            <div className="spin" style={{ fontSize:"28px", marginBottom:"12px" }}>⟳</div>
+            <div style={{ fontSize:"14px", color:"#a78bfa", fontWeight:"700" }}>Generating research for {ticker}…</div>
+            <div style={{ fontSize:"11px", color:"#475569", marginTop:"6px" }}>Using {selectedPrompt?.name} prompt · {provider === "anthropic" ? "Claude" : "GPT-4o"}</div>
+          </div>
+        )}
+
+        {/* Result */}
+        {result && !loading && (
+          <div style={{ background:"#0d1324", border:"1px solid #1e293b", borderRadius:"12px", overflow:"hidden" }}>
+            <div style={{ padding:"16px 20px", borderBottom:"1px solid #1e293b", display:"flex", justifyContent:"space-between", alignItems:"center", background:"#0a0f1f" }}>
+              <div>
+                <span style={{ fontSize:"16px", fontWeight:"900", color:"#f8fafc" }}>{ticker}</span>
+                <span style={{ fontSize:"12px", color:"#64748b", marginLeft:"10px" }}>{selectedPrompt?.icon} {selectedPrompt?.name}</span>
+                <span style={{ fontSize:"10px", color:"#334155", marginLeft:"10px" }}>{new Date().toLocaleString()}</span>
+              </div>
+              <div style={{ display:"flex", gap:"8px" }}>
+                <button onClick={() => { navigator.clipboard.writeText(result); }} style={{ padding:"5px 12px", borderRadius:"6px", cursor:"pointer", fontSize:"10px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>📋 Copy</button>
+                <button onClick={() => { setResult(null); setSelectedPrompt(null); }} style={{ padding:"5px 12px", borderRadius:"6px", cursor:"pointer", fontSize:"10px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>✕ Clear</button>
+              </div>
+            </div>
+            <div className="research-output" style={{ padding:"20px 24px", maxHeight:"70vh", overflowY:"auto" }}
+              dangerouslySetInnerHTML={{ __html: mdToHtml(result) }} />
+          </div>
+        )}
+      </div>
+
+      {/* History modal */}
+      {showHistory && (
+        <div onClick={() => setShowHistory(false)} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.78)", zIndex:300, display:"flex", alignItems:"center", justifyContent:"center", padding:"20px" }}>
+          <div onClick={e => e.stopPropagation()} style={{ background:"#0c1120", border:"1px solid #1e293b", borderRadius:"14px", width:"100%", maxWidth:"520px", maxHeight:"80vh", overflowY:"auto", padding:"26px" }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"18px" }}>
+              <span style={{ fontSize:"17px", fontWeight:"800" }}>📜 Research History</span>
+              <button onClick={() => setShowHistory(false)} style={{ background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:"22px" }}>✕</button>
+            </div>
+            {history.length === 0 ? (
+              <div style={{ color:"#475569", textAlign:"center", padding:"40px 0" }}>No research generated yet.</div>
+            ) : history.map((h, i) => (
+              <div key={i} onClick={() => loadHistoryEntry(h)} className="prompt-card" style={{
+                padding:"12px 14px", borderRadius:"8px", marginBottom:"6px", background:"#080e1c", border:"1px solid #1e293b",
+              }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:"14px", fontWeight:"800", color:"#f8fafc" }}>{h.sym}</span>
+                  <span style={{ fontSize:"10px", color:"#475569" }}>{new Date(h.ts).toLocaleDateString()} {new Date(h.ts).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}</span>
+                </div>
+                <div style={{ fontSize:"11px", color:"#64748b", marginTop:"3px" }}>{h.promptName}</div>
+                <div style={{ fontSize:"10px", color:"#334155", marginTop:"3px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.output?.slice(0, 100)}…</div>
+              </div>
+            ))}
+            {history.length > 0 && (
+              <button onClick={() => { saveResearchHistory([]); setHistory([]); }} style={{ marginTop:"10px", padding:"6px 14px", borderRadius:"6px", cursor:"pointer", fontSize:"10px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#475569" }}>Clear History</button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit Prompt modal */}
+      {showAddPrompt && (
+        <AddPromptModal
+          editPrompt={editingPrompt}
+          onSave={handleSavePrompt}
+          onClose={() => { setShowAddPrompt(false); setEditingPrompt(null); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ================================================================
+// STAGE TRACKER PAGE (existing functionality)
+// ================================================================
+function StageTrackerPage() {
+  const [stocks, setStocks] = useState({});
+  const [overrides, setOverrides] = useState({});
+  const [inPlay, setInPlay] = useState(INIT_IP);
+  const [tab, setTab] = useState("macro");
+  const [busy, setBusy] = useState(new Set());
+  const [lastRe, setLastRe] = useState(null);
+  const [cntDown, setCntDown] = useState(REFRESH_MS);
+  const [alerts, setAlerts] = useState([]);
+  const [showEdit, setShowEdit] = useState(false);
+  const [showAlerts, setShowAlerts] = useState(false);
+  const [detail, setDetail] = useState(null);
+  const [sortBy, setSortBy] = useState("default");
+  const [filterStage, setFilterStage] = useState(null);
+  const [viewTf, setViewTf] = useState("daily");
+  const [notifState, setNotifState] = useState(typeof Notification !== "undefined" ? Notification.permission : "default");
+  const [turnMonitor, setTurnMonitor] = useState(false);
+  const [turnLastCheck, setTurnLastCheck] = useState(null);
+  const [turnAlerts, setTurnAlerts] = useState([]);
+  const [feedbackCount, setFeedbackCount] = useState(loadFeedback().length);
+
+  const prevRef = useRef({});
+  const chainRef = useRef({});
+  const rTimer = useRef(null);
+  const cTimer = useRef(null);
+  const nextTs = useRef(Date.now() + REFRESH_MS);
+  const overRef = useRef(overrides);
+  const turnRef = useRef(null);
+
+  useEffect(()=>{ overRef.current = overrides; }, [overrides]);
+
+  const pushAlert = useCallback((sym, from, to) => {
+    const a = { id:`${sym}-${Date.now()}`, sym, from, to, ts:new Date() };
+    setAlerts(p => [a, ...p].slice(0, 50));
+    if (Notification?.permission === "granted") {
+      try { new Notification(`📊 ${sym}: S${from}→S${to}`, { body:`${STAGES[to]?.name} — ${STAGES[to]?.strategy}` }); } catch(_){}
+    }
+  }, []);
+
+  const handleRecordFeedback = useCallback((sym, fromStage, toStage, reason, snapshot, timeframe) => {
+    recordFeedback(sym, fromStage, toStage, reason, snapshot, timeframe);
+    setFeedbackCount(loadFeedback().length);
+  }, []);
+
+  const fetchBatch = useCallback(async (syms) => {
+    setBusy(p => new Set([...p, ...syms]));
+    const results = await Promise.allSettled(syms.map(s => fetchTicker(s)));
+    setStocks(p => {
+      const next = {...p};
+      results.forEach((r,i) => {
+        const s = syms[i];
+        if (r.status === "fulfilled") {
+          const data = r.value;
+          const rawStage = data.analysis.stage;
+          const os = prevRef.current[s];
+          if (os === 1 && rawStage === 2) chainRef.current[s] = true;
+          if (rawStage === 1) chainRef.current[s] = false;
+
+          if (rawStage === 3 && data.hist) {
+            data.analysis = classify(data.hist, data.turnBars || data.hourlyBars, chainRef.current[s] === true);
+          }
+
+          // Carry forward classification timestamps if stage unchanged
+          const prev_data = p[s];
+          if (prev_data) {
+            // Daily
+            if (prev_data.analysis?.stage === data.analysis.stage && prev_data.analysis?.classifiedAt) {
+              data.analysis.classifiedAt = prev_data.analysis.classifiedAt;
+              data.analysis.classifiedPrice = prev_data.analysis.classifiedPrice;
+            }
+            // Hourly
+            if (data.hourlyAnalysis && prev_data.hourlyAnalysis?.stage === data.hourlyAnalysis.stage && prev_data.hourlyAnalysis?.classifiedAt) {
+              data.hourlyAnalysis.classifiedAt = prev_data.hourlyAnalysis.classifiedAt;
+              data.hourlyAnalysis.classifiedPrice = prev_data.hourlyAnalysis.classifiedPrice;
+            }
+            // Weekly
+            if (data.weeklyAnalysis && prev_data.weeklyAnalysis?.stage === data.weeklyAnalysis.stage && prev_data.weeklyAnalysis?.classifiedAt) {
+              data.weeklyAnalysis.classifiedAt = prev_data.weeklyAnalysis.classifiedAt;
+              data.weeklyAnalysis.classifiedPrice = prev_data.weeklyAnalysis.classifiedPrice;
+            }
+          }
+
+          // Learning engine
+          const snap = captureSnapshot(data.analysis, data.price);
+          const hint = queryFeedback(snap);
+          if (hint && hint.confidence >= 0.7 && hint.stage !== data.analysis.stage) {
+            data.feedbackHint = hint;
+            if (hint.confidence >= 0.85 && hint.agreeing >= 2) {
+              data.analysis = { ...data.analysis, stage: hint.stage, learnedOverride: true, learnedReason: hint.reason };
+            }
+          }
+
+          next[s] = data;
+          const ns = overRef.current[s] ?? data.analysis.stage;
+          if (os != null && os !== ns) pushAlert(s, os, ns);
+          prevRef.current[s] = ns;
+        } else {
+          next[s] = {...(p[s]||{}), sym:s, err:r.reason?.message||"Error", loaded:false, ts:Date.now()};
+        }
+      });
+      return next;
+    });
+    setBusy(p => { const s=new Set(p); syms.forEach(x=>s.delete(x)); return s; });
+  }, [pushAlert]);
+
+  const refreshAll = useCallback(async () => {
+    setLastRe(new Date());
+    const all = [...new Set([...MACRO,...MAINSTREAM,...inPlay])];
+    for (let i=0; i<all.length; i+=5) {
+      await fetchBatch(all.slice(i, i+5));
+      if (i+5 < all.length) await new Promise(r=>setTimeout(r,700));
+    }
+  }, [inPlay, fetchBatch]);
+
+  useEffect(()=>{ refreshAll(); }, []); // eslint-disable-line
+
+  useEffect(()=>{
+    clearInterval(rTimer.current); clearInterval(cTimer.current);
+    nextTs.current = Date.now() + REFRESH_MS;
+    cTimer.current = setInterval(()=>setCntDown(Math.max(0, nextTs.current-Date.now())), 1000);
+    rTimer.current = setInterval(()=>{ nextTs.current=Date.now()+REFRESH_MS; refreshAll(); }, REFRESH_MS);
+    return ()=>{ clearInterval(rTimer.current); clearInterval(cTimer.current); };
+  }, [refreshAll]);
+
+  // Turn Monitor
+  const runTurnScan = useCallback(async () => {
+    const etInfo = getETInfo();
+    if (!etInfo.isMorning) return;
+    const all = [...new Set([...MACRO,...MAINSTREAM,...inPlay])];
+    // Only S4 (Exhausting) stocks can turn — S5 requires prior exhaustion
+    const candidates = all.filter(s => {
+      const stage = overRef.current[s] ?? stocks[s]?.analysis?.stage;
+      return stage === 4;
+    });
+    if (candidates.length === 0) return;
+    setTurnLastCheck(new Date());
+    for (let i = 0; i < candidates.length; i += 4) {
+      const batch = candidates.slice(i, i + 4);
+      const results = await Promise.allSettled(batch.map(s => fetchTurnData(s)));
+      results.forEach((r, idx) => {
+        if (r.status !== "fulfilled") return;
+        const sym = batch[idx];
+        const turnBars = r.value;
+        const dailyHist = stocks[sym]?.hist;
+        if (!dailyHist || dailyHist.length < 22) return;
+        const newAnalysis = classify(dailyHist, turnBars, chainRef.current[sym] === true);
+        if (newAnalysis.stage === 5 && newAnalysis.intradayDetected) {
+          const existing = turnAlerts.find(a => a.sym === sym && Date.now() - a.ts < 3600000);
+          if (!existing) {
+            setTurnAlerts(p => [{ sym, direction: newAnalysis.direction, gapPct: newAnalysis.gapPct, ts: Date.now() }, ...p].slice(0, 20));
+            pushAlert(sym, stocks[sym]?.analysis?.stage || 3, 5);
+            setStocks(p => ({ ...p, [sym]: { ...p[sym], analysis: newAnalysis, autoStage: 5, turnBars } }));
+          }
+        }
+      });
+      if (i + 4 < candidates.length) await new Promise(r => setTimeout(r, 500));
+    }
+  }, [stocks, inPlay, turnAlerts, pushAlert]);
+
+  useEffect(() => {
+    clearInterval(turnRef.current);
+    if (turnMonitor) { runTurnScan(); turnRef.current = setInterval(runTurnScan, 5 * 60 * 1000); }
+    return () => clearInterval(turnRef.current);
+  }, [turnMonitor, runTurnScan]);
+
+  // Per-timeframe override support: overrides[sym] can be a number (legacy) or
+  // an object { daily: n, hourly: n, weekly: n }
+  const stageOfTf = (sym, tf) => {
+    const ov = overrides[sym];
+    if (ov != null && typeof ov === "object" && ov[tf] != null) return ov[tf];
+    if (ov != null && typeof ov === "number" && tf === "daily") return ov;
+    const d = stocks[sym];
+    if (!d) return 0;
+    if (tf === "hourly") return d.hourlyAnalysis?.stage ?? 0;
+    if (tf === "weekly") return d.weeklyAnalysis?.stage ?? 0;
+    return d.analysis?.stage ?? 0;
+  };
+  // Returns the analysis object for the given timeframe
+  const analysisForTf = (sym, tf) => {
+    const d = stocks[sym];
+    if (!d) return null;
+    if (tf === "hourly") return d.hourlyAnalysis;
+    if (tf === "weekly") return d.weeklyAnalysis;
+    return d.analysis;
+  };
+  // stageOf uses the currently selected viewTf
+  const stageOf = sym => stageOfTf(sym, viewTf);
+
+  // Compute near-breakout/breakdown stocks (stocks in S1 on ANY timeframe, within 2% of boundary)
+  const nearBreakSyms = React.useMemo(() => {
+    const all = [...new Set([...MACRO, ...MAINSTREAM, ...inPlay])];
+    const result = [];
+    for (const sym of all) {
+      const d = stocks[sym];
+      if (!d?.consolBounds) continue;
+      // Check if S1 on any timeframe
+      const isS1Any = stageOfTf(sym, "daily") === 1 || stageOfTf(sym, "hourly") === 1 || stageOfTf(sym, "weekly") === 1;
+      if (!isS1Any) continue;
+      const allBounds = [...(d.consolBounds.daily || []), ...(d.consolBounds.hourly || []), ...(d.consolBounds.weekly || [])];
+      const hasNear = allBounds.some(b => b.priceInRange && (b.nearBreakout || b.nearBreakdown));
+      if (hasNear) result.push(sym);
+    }
+    return result;
+  }, [stocks, overrides, inPlay]);
+
+  const curSyms = tab === "nearbreak" ? nearBreakSyms : tab === "inplay" ? inPlay : TABS[tab]?.syms || [];
+  let displaySyms = [...curSyms];
+  if (filterStage != null) displaySyms = displaySyms.filter(s => stageOf(s) === filterStage);
+  if (sortBy === "stage") displaySyms.sort((a,b) => stageOf(a) - stageOf(b));
+  else if (sortBy === "change") displaySyms.sort((a,b) => (stocks[b]?.pct||0) - (stocks[a]?.pct||0));
+  else if (sortBy === "rvol") displaySyms.sort((a,b) => (stocks[b]?.analysis?.rvol||0) - (stocks[a]?.analysis?.rvol||0));
+
+  const enableNotif = () => { Notification.requestPermission().then(p => setNotifState(p)); };
+
+  return (
+    <div style={{ padding:"0 0 40px" }}>
+      {/* Turn alerts bar */}
+      {turnAlerts.length > 0 && (
+        <div style={{ background:"#1a0a2e", borderBottom:"1px solid #7c3aed33", padding:"8px 20px", display:"flex", gap:"12px", alignItems:"center", overflowX:"auto" }}>
+          <span style={{ color:"#a78bfa", fontWeight:"800", fontSize:"11px", flexShrink:0 }}>🔄 TURNS:</span>
+          {turnAlerts.slice(0, 5).map(a => (
+            <span key={a.sym+a.ts} style={{ fontSize:"11px", color:"#e2e8f0", background:"#2e1065", padding:"3px 10px", borderRadius:"4px", border:"1px solid #7c3aed55", flexShrink:0 }}>
+              {a.sym} {a.direction === "toDown" ? "▼" : "▲"} gap {a.gapPct}%
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{ padding:"20px 24px 0", maxWidth:"1400px", margin:"0 auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:"12px" }}>
+          <div>
+            <h1 style={{ fontSize:"22px", fontWeight:"900", letterSpacing:"0.04em", margin:0, background:"linear-gradient(135deg,#e2e8f0,#94a3b8)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
+              Stage Tracker
+            </h1>
+            <div style={{ color:"#475569", fontSize:"11px", marginTop:"4px" }}>
+              {lastRe ? `Last refresh: ${lastRe.toLocaleTimeString()}` : "Loading…"} · Next in {fmtCnt(cntDown)}
+            </div>
+          </div>
+          <div style={{ display:"flex", gap:"8px", flexWrap:"wrap" }}>
+            <button onClick={() => setTurnMonitor(p => !p)} style={{
+              padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"800",
+              border: turnMonitor ? "1px solid #7c3aed" : "1px solid #334155",
+              background: turnMonitor ? "#2e106522" : "transparent",
+              color: turnMonitor ? "#a78bfa" : "#64748b",
+            }}>{turnMonitor ? "🔄 Turn Monitor ON" : "Turn Monitor"}</button>
+            {notifState !== "granted" && (
+              <button onClick={enableNotif} style={{ padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>
+                🔔 Enable Alerts
+              </button>
+            )}
+            <button onClick={()=>setShowAlerts(true)} style={{ padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b", position:"relative" }}>
+              ⚡ History {alerts.length > 0 && <span style={{ position:"absolute", top:"-4px", right:"-4px", background:"#ef4444", color:"#fff", fontSize:"9px", fontWeight:"800", borderRadius:"10px", padding:"1px 5px" }}>{alerts.length}</span>}
+            </button>
+            <button onClick={refreshAll} style={{ padding:"7px 14px", borderRadius:"7px", cursor:"pointer", fontSize:"11px", fontWeight:"700", border:"1px solid #334155", background:"transparent", color:"#64748b" }}>↻ Refresh</button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:"flex", gap:"4px", marginTop:"20px" }}>
+          {Object.entries(TABS).map(([k,t]) => (
+            <button key={k} onClick={()=>setTab(k)} style={{
+              padding:"8px 20px", borderRadius:"8px 8px 0 0", cursor:"pointer", fontSize:"12px", fontWeight:"800",
+              border: tab===k ? "1px solid #334155" : "1px solid transparent", borderBottom: "none",
+              background: tab===k ? "#0d1324" : "transparent", color: tab===k ? "#f8fafc" : "#475569",
+            }}>
+              {t.label}{k==="nearbreak" && nearBreakSyms.length > 0 && <span style={{ marginLeft:"4px", fontSize:"9px", color:"#ef4444", fontWeight:"800" }}>{nearBreakSyms.length}</span>} {k==="inplay" && <span onClick={e=>{e.stopPropagation();setShowEdit(true);}} style={{ marginLeft:"6px", fontSize:"10px", cursor:"pointer", color:"#3b82f6" }}>✎</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* Timeframe / Sort / Filter */}
+        <div style={{ display:"flex", gap:"8px", marginTop:"14px", flexWrap:"wrap", alignItems:"center" }}>
+          <span style={{ color:"#475569", fontSize:"10px", fontWeight:"700" }}>TIMEFRAME:</span>
+          {[["hourly","Hourly"],["daily","Daily"],["weekly","Weekly"]].map(([k,l]) => (
+            <button key={k} onClick={()=>setViewTf(k)} style={{
+              padding:"5px 14px", borderRadius:"5px", cursor:"pointer", fontSize:"11px", fontWeight:"800",
+              border: viewTf===k ? "1px solid #a78bfa" : "1px solid #1e293b",
+              background: viewTf===k ? "#2e106530" : "transparent",
+              color: viewTf===k ? "#c4b5fd" : "#475569",
+            }}>{l}</button>
+          ))}
+
+          <span style={{ color:"#334155", margin:"0 4px" }}>│</span>
+
+          <span style={{ color:"#475569", fontSize:"10px", fontWeight:"700" }}>STAGE:</span>
+          {[null,0,1,2,3,4,5,6].map(st => (
+            <button key={st??"all"} onClick={()=>setFilterStage(st)} style={{
+              padding:"4px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"10px", fontWeight:"700",
+              border: filterStage===st ? "1px solid #3b82f6" : "1px solid #1e293b",
+              background: filterStage===st ? "#1e408030" : "transparent",
+              color: filterStage===st ? "#93c5fd" : st != null ? (STAGES[st]?.color || "#475569") : "#475569",
+            }}>{st === null ? "All" : st === 0 ? "💤" : `S${st}`}</button>
+          ))}
+
+          <span style={{ color:"#334155", margin:"0 4px" }}>│</span>
+
+          <span style={{ color:"#475569", fontSize:"10px", fontWeight:"700" }}>SORT:</span>
+          {[["default","Default"],["stage","Stage"],["change","% Chg"],["rvol","RVOL"]].map(([k,l]) => (
+            <button key={k} onClick={()=>setSortBy(k)} style={{
+              padding:"4px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"10px", fontWeight:"700",
+              border: sortBy===k ? "1px solid #3b82f6" : "1px solid #1e293b",
+              background: sortBy===k ? "#1e408030" : "transparent", color: sortBy===k ? "#93c5fd" : "#475569",
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Near Break empty state */}
+      {tab === "nearbreak" && nearBreakSyms.length === 0 && (
+        <div style={{ padding:"60px 24px", textAlign:"center", color:"#475569" }}>
+          <div style={{ fontSize:"36px", marginBottom:"12px" }}>◈</div>
+          <div style={{ fontSize:"14px", fontWeight:"700" }}>No stocks within 2% of breakout or breakdown</div>
+          <div style={{ fontSize:"12px", marginTop:"6px" }}>This page shows S1 (Consolidation) stocks near their range boundaries.</div>
+        </div>
+      )}
+
+      {/* Cards grid */}
+      <div style={{ padding:"16px 24px", maxWidth:"1400px", margin:"0 auto",
+        display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:"10px",
+      }}>
+        {displaySyms.map(sym => (
+          <StockCard key={sym} sym={sym} d={stocks[sym]} effStage={stageOf(sym)}
+            isLoading={busy.has(sym)} isManual={overrides[sym]!=null && (typeof overrides[sym]==="number" || Object.keys(overrides[sym]).length>0)}
+            showNearBreak={tab === "nearbreak"}
+            tfAnalysis={analysisForTf(sym, viewTf)}
+            viewTf={viewTf}
+            relStrength={sym !== "SPY" && stocks["SPY"]?.hist && stocks[sym]?.hist ? calcRelativeStrength(stocks[sym].hist, stocks["SPY"].hist, 20) : null}
+            onClick={()=>setDetail(sym)} />
+        ))}
+      </div>
+
+      {/* Modals */}
+      {detail && stocks[detail] && (
+        <DetailModal sym={detail} d={stocks[detail]} effStage={stageOf(detail)}
+          isManual={overrides[detail]!=null && (typeof overrides[detail]==="number" || Object.keys(overrides[detail]).length>0)} setOverrides={setOverrides}
+          onRecordFeedback={handleRecordFeedback}
+          feedbackHint={stocks[detail]?.feedbackHint}
+          refreshAllTickers={refreshAll}
+          overrides={overrides}
+          relStrength={detail !== "SPY" && stocks["SPY"]?.hist && stocks[detail]?.hist ? calcRelativeStrength(stocks[detail].hist, stocks["SPY"].hist, 20) : null}
+          onClose={()=>setDetail(null)} />
+      )}
+      {showEdit && <InPlayEditor inPlay={inPlay} setInPlay={setInPlay} onFetch={fetchBatch} onClose={()=>setShowEdit(false)}/>}
+      {showAlerts && <AlertsPanel alerts={alerts} onClose={()=>setShowAlerts(false)}/>}
+
+      {/* Footer */}
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#060b18ee", backdropFilter:"blur(8px)", borderTop:"1px solid #1e293b",
+        padding:"6px 24px", display:"flex", justifyContent:"space-between", fontSize:"10px", color:"#334155" }}>
+        <span>Yahoo Finance · 30-min refresh · Proxy {activeProxyIdx+1}/{CORS_PROXIES.length} · {yahooAuth.crumb ? "Crumb ✓" : "No crumb"}</span>
+        <span>{feedbackCount > 0 ? `🧠 ${feedbackCount} learned · ` : ""}{alerts.length} changes logged</span>
+      </div>
+    </div>
+  );
+}
+
+// ================================================================
+// CALENDAR PAGE (placeholder)
+// ================================================================
+function CalendarPage() {
+  return (
+    <div style={{ padding:"80px 24px", textAlign:"center" }}>
+      <div style={{ fontSize:"48px", marginBottom:"16px" }}>📅</div>
+      <div style={{ fontSize:"20px", fontWeight:"800", color:"#e2e8f0" }}>Calendar</div>
+      <div style={{ fontSize:"13px", color:"#475569", marginTop:"8px" }}>Coming soon — earnings dates, economic events, and trading calendar.</div>
+    </div>
+  );
+}
+
+// ================================================================
+// TOP-LEVEL APP — page router with tabs
+// ================================================================
+function App() {
+  const [page, setPage] = useState("tracker");
+
+  return (
+    <div style={{ fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif", color:"#e2e8f0", minHeight:"100vh" }}>
+      {/* Top navigation */}
+      <div style={{ background:"#060b18", borderBottom:"1px solid #1e293b", padding:"0 24px", position:"sticky", top:0, zIndex:200, backdropFilter:"blur(12px)" }}>
+        <div style={{ maxWidth:"1400px", margin:"0 auto", display:"flex", alignItems:"center", gap:"0" }}>
+          <span style={{ fontSize:"14px", fontWeight:"900", letterSpacing:"0.06em", color:"#475569", marginRight:"24px", padding:"14px 0" }}>JG</span>
+          {[
+            { id: "tracker",  label: "Stage Tracker", icon: "📊" },
+            { id: "research", label: "Research",      icon: "🔬" },
+            { id: "calendar", label: "Calendar",      icon: "📅" },
+          ].map(t => (
+            <button key={t.id} onClick={() => setPage(t.id)} style={{
+              padding:"14px 20px", cursor:"pointer", fontSize:"13px", fontWeight:"700",
+              background:"transparent", border:"none", borderBottom: page === t.id ? "2px solid #818cf8" : "2px solid transparent",
+              color: page === t.id ? "#e2e8f0" : "#475569",
+              transition:"all 0.15s ease",
+            }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Page content */}
+      {page === "tracker"  && <StageTrackerPage />}
+      {page === "research" && <ResearchPage />}
+      {page === "calendar" && <CalendarPage />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
